@@ -1,0 +1,71 @@
+# VT-Detection Training Configuration
+# IEC 62304 Ref: SRS-TRAIN-002
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dataset Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+dataset:
+  # Path to MIT-BIH dataset (with raw ECG files)
+  mit_path: "data/MIT_dataset"
+  
+  # Cache preprocessed data for faster iteration
+  cache_dir: "data/processed/mit_cache"
+  
+  # Train/val/test split ratios
+  test_size: 0.2
+  val_size: 0.1
+  
+  # Sampling fraction (1.0 = use all data; 0.5 = 50% for quick experiments)
+  sample_fraction: 1.0
+  
+  # Force recompute from raw files (ignore cache)
+  force_recompute: false
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Model Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+model:
+  # Input shape: (time_steps, num_leads)
+  # MIT-BIH: 10 seconds @ 360 Hz = 3600 samples, 2 leads
+  input_shape: [3600, 2]
+  
+  # Dropout rate for regularization
+  dropout_rate: 0.5
+  
+  # Adam optimizer learning rate
+  learning_rate: 0.001
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Training Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+training:
+  # Batch size for mini-batch SGD
+  batch_size: 32
+  
+  # Maximum number of training epochs
+  epochs: 20
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MLflow Experiment Tracking
+# ──────────────────────────────────────────────────────────────────────────────
+mlflow:
+  # Experiment name (groups related runs)
+  experiment_name: "VT-Detection"
+  
+  # Run name (specific training run identifier)
+  run_name: "baseline-vgg16-transfer-learning"
+  
+  # MLflow tracking URI (default: local ./mlruns directory)
+  tracking_uri: "sqlite:///mlruns.db"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Paths
+# ──────────────────────────────────────────────────────────────────────────────
+paths:
+  checkpoint: "models/artifacts/vgg16_best.keras"
+  logs: "logs/training/"
+  plots: "plots/"

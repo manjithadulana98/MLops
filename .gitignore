@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# DVC – data is tracked by DVC, not Git
+/data/raw/
+/data/processed/
+/data/validation/
+
+# Model artefacts (large binaries)
+/models/artifacts/*.h5
+/models/artifacts/*.keras
+/models/artifacts/*.pkl
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db

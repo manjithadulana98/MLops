@@ -1,0 +1,87 @@
+# DVC Pipeline Definition
+# ──────────────────────────────────────────────────────────────────────────────
+# Orchestrates: data loading → model training → evaluation
+#
+# Usage:
+#   dvc repro              # Run full pipeline
+#   dvc repro -s train     # Run specific stage
+#   dvc dag                # View DAG
+#
+# IEC 62304 Ref: SRS-PIPELINE-001
+
+stages:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stage 1: Prepare MIT dataset (caching + preprocessing)
+  # ──────────────────────────────────────────────────────────────────────────
+  prepare:
+    cmd: >
+      python -c "
+      from src.ingestion.load_mit_dataset import MITDatasetLoader;
+      loader = MITDatasetLoader('data/MIT_dataset', 'data/processed/mit_cache');
+      loader.load_and_preprocess_all_records(force_recompute=True);
+      "
+    deps:
+      - data/MIT_dataset
+      - src/ingestion/load_mit_dataset.py
+    outs:
+      - data/processed/mit_cache/mit_preprocessed.npz
+    params:
+      - dataset.mit_path
+      - dataset.cache_dir
+      - dataset.test_size
+      - dataset.val_size
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stage 2: Train VGG16 transfer learning model
+  # ──────────────────────────────────────────────────────────────────────────
+  train:
+    cmd: python -m src.training.train --config configs/training_config.yaml
+    deps:
+      - data/processed/mit_cache/mit_preprocessed.npz
+      - src/ingestion/load_mit_dataset.py
+      - src/training/train.py
+      - src/training/model.py
+      - configs/training_config.yaml
+    outs:
+      - models/artifacts/vgg16_best.keras
+    metrics:
+      - models/metrics.json:
+          cache: false
+    params:
+      - model
+      - training
+      - mlflow
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stage 3: Evaluate model on test set
+  # ──────────────────────────────────────────────────────────────────────────
+  evaluate:
+    cmd: >
+      python -m src.evaluation.pipeline
+      --model models/artifacts/vgg16_best.keras
+      --config configs/training_config.yaml
+      --output reports/evaluation_report.json
+    deps:
+      - models/artifacts/vgg16_best.keras
+      - src/evaluation/pipeline.py
+      - src/evaluation/evaluate.py
+      - configs/training_config.yaml
+    outs:
+      - reports/evaluation_report.json
+      - plots/roc_curve.png
+      - plots/confusion_matrix.png
+      - plots/pr_curve.png
+    plots:
+      - plots/roc_curve.png
+      - plots/confusion_matrix.png
+      - plots/pr_curve.png
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parameters tracked across pipeline (allow grid search)
+# ──────────────────────────────────────────────────────────────────────────────
+params:
+  - configs/training_config.yaml:
+      - dataset
+      - model
+      - training
+      - mlflow
