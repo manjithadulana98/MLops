@@ -71,17 +71,9 @@ stages:
       - plots/roc_curve.png
       - plots/confusion_matrix.png
       - plots/pr_curve.png
-    plots:
-      - plots/roc_curve.png
-      - plots/confusion_matrix.png
-      - plots/pr_curve.png
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Parameters tracked across pipeline (allow grid search)
 # ──────────────────────────────────────────────────────────────────────────────
 params:
-  - configs/training_config.yaml:
-      - dataset
-      - model
-      - training
-      - mlflow
+  - configs/training_config.yaml

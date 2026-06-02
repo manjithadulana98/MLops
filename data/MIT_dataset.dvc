@@ -1,0 +1,6 @@
+outs:
+- md5: 00532d58398af0eea8a1e305ef0f6b1f.dir
+  size: 109347512
+  nfiles: 705
+  hash: md5
+  path: MIT_dataset
