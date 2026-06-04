@@ -1,0 +1,115 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: python -m src.ingestion.prepare --config configs/training_config.yaml
+    deps:
+    - path: data/MIT_dataset
+      hash: md5
+      md5: 00532d58398af0eea8a1e305ef0f6b1f.dir
+      size: 109347512
+      nfiles: 705
+    - path: src/ingestion/load_mit_dataset.py
+      hash: md5
+      md5: f95aadbe2ab9da2882d43067ba5f20b1
+      size: 8845
+    - path: src/ingestion/prepare.py
+      hash: md5
+      md5: 0e144ece8261328ba122514c1d918f34
+      size: 1361
+    params:
+      configs/training_config.yaml:
+        dataset.cache_dir: data/processed/mit_cache
+        dataset.force_recompute: false
+        dataset.mit_path: data/MIT_dataset
+        dataset.sample_fraction: 0.05
+        dataset.test_size: 0.2
+        dataset.val_size: 0.1
+    outs:
+    - path: data/processed/mit_cache/mit_preprocessed.npz
+      hash: md5
+      md5: 76c5e54b302e86b451103058d5dddc07
+      size: 61051988
+  train:
+    cmd: python -m src.training.train --config configs/training_config.yaml
+    deps:
+    - path: configs/training_config.yaml
+      hash: md5
+      md5: efbc9f0673aff1373f0edb66283971f2
+      size: 3802
+    - path: data/processed/mit_cache/mit_preprocessed.npz
+      hash: md5
+      md5: 76c5e54b302e86b451103058d5dddc07
+      size: 61051988
+    - path: src/ingestion/load_mit_dataset.py
+      hash: md5
+      md5: f95aadbe2ab9da2882d43067ba5f20b1
+      size: 8845
+    - path: src/training/model.py
+      hash: md5
+      md5: 23c1297a9776cd6f8dd783149aa67316
+      size: 12340
+    - path: src/training/train.py
+      hash: md5
+      md5: 16559355d7a3fdab9c209452e61a4240
+      size: 10946
+    params:
+      configs/training_config.yaml:
+        mlflow:
+          experiment_name: VT-Detection
+          run_name: baseline-vgg16-transfer-learning
+          tracking_uri: sqlite:///mlruns.db
+        model:
+          input_shape:
+          - 3600
+          - 2
+          dropout_rate: 0.5
+          learning_rate: 0.001
+        training:
+          batch_size: 16
+          epochs: 2
+    outs:
+    - path: models/artifacts/vgg16_best.keras
+      hash: md5
+      md5: 6f070a5463db94c0c6bacc77a54cbfb4
+      size: 60733343
+    - path: models/metrics.json
+      hash: md5
+      md5: d8059e616b9e084f2cc122add02fb872
+      size: 341
+  evaluate:
+    cmd: "python -m src.evaluation.pipeline --model models/artifacts/vgg16_best.keras
+      --config configs/training_config.yaml --output reports/evaluation_report.json\n"
+    deps:
+    - path: configs/training_config.yaml
+      hash: md5
+      md5: efbc9f0673aff1373f0edb66283971f2
+      size: 3802
+    - path: models/artifacts/vgg16_best.keras
+      hash: md5
+      md5: 6f070a5463db94c0c6bacc77a54cbfb4
+      size: 60733343
+    - path: src/evaluation/evaluate.py
+      hash: md5
+      md5: f1332ba2cbc2fdc94415904df7dc6d1e
+      size: 9174
+    - path: src/evaluation/pipeline.py
+      hash: md5
+      md5: ff535fe8433b28d5c045af0eedd42966
+      size: 3457
+    outs:
+    - path: plots/confusion_matrix.png
+      hash: md5
+      md5: 66740c0f0870a1cd53053482ca4f2e00
+      size: 36542
+    - path: plots/pr_curve.png
+      hash: md5
+      md5: 49d339a7862d1226ef58ffe273ef6bf9
+      size: 46714
+    - path: plots/roc_curve.png
+      hash: md5
+      md5: b126fa8f9152d39ec86645d93d0e3849
+      size: 57546
+    - path: reports/evaluation_report.json
+      hash: md5
+      md5: 28dd38cbaa50ae1d55db1645bc7ba60a
+      size: 105408
