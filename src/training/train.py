@@ -157,6 +157,21 @@ class TrainingPipeline:
         checkpoint_path = self.config.get("paths", {}).get(
             "checkpoint", "models/artifacts/vgg16_best.keras"
         )
+        save_best_checkpoint = train_config.get("save_best_checkpoint", False)
+        early_stopping_patience = train_config.get("early_stopping_patience", 5)
+        use_class_weights = train_config.get("use_class_weights", False)
+        class_weight = None
+        if use_class_weights:
+            pos_ratio = float(np.mean(y_train))
+            neg_ratio = 1.0 - pos_ratio
+            if pos_ratio > 0 and neg_ratio > 0:
+                class_weight = {
+                    0: 1.0 / (2.0 * neg_ratio),
+                    1: 1.0 / (2.0 * pos_ratio),
+                }
+                logger.info(f"Using class weights: {class_weight}")
+            else:
+                logger.warning("Class weights requested but class ratio is degenerate; skipping.")
 
         logger.info("Starting model training...")
 
@@ -168,6 +183,9 @@ class TrainingPipeline:
             batch_size=train_config.get("batch_size", 32),
             epochs=train_config.get("epochs", 20),
             checkpoint_path=checkpoint_path,
+            class_weight=class_weight,
+            save_best_checkpoint=save_best_checkpoint,
+            early_stopping_patience=early_stopping_patience,
         )
 
         return history
@@ -203,9 +221,22 @@ class TrainingPipeline:
         mlflow_config = self.config.get("mlflow", {})
         experiment_name = mlflow_config.get("experiment_name", "VT-Detection-Default")
         run_name = mlflow_config.get("run_name", "baseline-vgg16")
+        tracking_uri = mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db")
 
-        # Set up MLflow
-        mlflow.set_experiment(experiment_name)
+        # Allow file-store backend if configured (opt-out of deprecation error).
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+
+        # Set up MLflow tracking backend. Fallback to fresh SQLite if primary fails.
+        mlflow.set_tracking_uri(tracking_uri)
+        try:
+            mlflow.set_experiment(experiment_name)
+        except Exception as exc:
+            logger.warning(
+                "MLflow tracking backend init failed (%s). Falling back to fresh SQLite store.",
+                exc,
+            )
+            mlflow.set_tracking_uri("sqlite:///mlflow_tracking.db")
+            mlflow.set_experiment(experiment_name)
 
         with mlflow.start_run(run_name=run_name):
             try:
@@ -241,18 +272,37 @@ class TrainingPipeline:
                 for metric_name, metric_value in test_metrics.items():
                     mlflow.log_metric(f"test_{metric_name}", metric_value)
 
+                # Persist metrics artifact expected by DVC.
+                metrics_path = Path("models/metrics.json")
+                metrics_path.parent.mkdir(parents=True, exist_ok=True)
+                with metrics_path.open("w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "test": test_metrics,
+                            "final_train": {
+                                metric_name: metric_values[-1]
+                                for metric_name, metric_values in history.items()
+                                if isinstance(metric_values, list) and metric_values
+                            },
+                        },
+                        f,
+                        indent=2,
+                    )
+
                 # Save model
                 checkpoint_path = self.config.get("paths", {}).get(
                     "checkpoint", "models/artifacts/vgg16_best.keras"
                 )
                 model.save(checkpoint_path)
-                mlflow.log_artifact(checkpoint_path)
+                # Skip MLflow artifact logging due to disk space constraints
+                # Model is already saved to models/artifacts/vgg16_best.keras
+                # logger.info(f"Model artifact logged: {checkpoint_path}")
 
-                logger.info("✓ Training pipeline completed successfully")
+                logger.info("Training pipeline completed successfully")
                 logger.info(f"MLflow run: {mlflow.active_run().info.run_id}")
 
             except Exception as e:
-                logger.error(f"✗ Training failed: {e}", exc_info=True)
+                logger.error(f"Training failed: {e}", exc_info=True)
                 raise
 
     @staticmethod

@@ -11,11 +11,13 @@ dataset:
   # Cache preprocessed data for faster iteration
   cache_dir: "data/processed/mit_cache"
   
-  # Train/val/test split ratios
-  test_size: 0.2
-  val_size: 0.1
+  # Train/val/test split ratios (70/20/10)
+  # test_size: First split off 10% for test, leaving 90% for train+val
+  # val_size: From remaining 90%, take 22.2% for val (= 20% of original), leaving 70% for train
+  test_size: 0.1
+  val_size: 0.2222
   
-  # Sampling fraction (1.0 = use all data; 0.5 = 50% for quick experiments)
+  # Sampling fraction (1.0 = use all data; reduces for quick experiments)
   sample_fraction: 1.0
   
   # Force recompute from raw files (ignore cache)
@@ -42,10 +44,20 @@ model:
 # ──────────────────────────────────────────────────────────────────────────────
 training:
   # Batch size for mini-batch SGD
-  batch_size: 32
+  batch_size: 16
   
-  # Maximum number of training epochs
-  epochs: 20
+  # Maximum number of training epochs (increase for full dataset)
+  epochs: 10
+
+  # Rebalance loss contribution for imbalanced classes
+  use_class_weights: true
+
+  # Skip per-epoch checkpoint writes on low-disk machines.
+  # Final model is still saved at the end of training.
+  save_best_checkpoint: false
+
+  # Early stopping patience
+  early_stopping_patience: 3
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -58,8 +70,8 @@ mlflow:
   # Run name (specific training run identifier)
   run_name: "baseline-vgg16-transfer-learning"
   
-  # MLflow tracking URI (default: local ./mlruns directory)
-  tracking_uri: "sqlite:///mlruns.db"
+  # MLflow tracking URI (fresh SQLite DB - avoids file-store deprecation)
+  tracking_uri: "sqlite:///mlflow_tracking.db"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -10,10 +10,9 @@ IEC 62304 Traceability
 
 from __future__ import annotations
 
-import os
 import logging
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 
 import numpy as np
 import wfdb
@@ -62,7 +61,7 @@ class MITDatasetLoader:
             raise FileNotFoundError(f"MIT dataset path not found: {self.dataset_path}")
         logger.info(f"Initialized MITDatasetLoader: {self.dataset_path}")
 
-    def load_record(self, record_id: str) -> Tuple[np.ndarray, np.ndarray]:
+    def load_record(self, record_id: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Load a single MIT record and return (two_lead_signals, annotations).
 
         Parameters
@@ -86,7 +85,7 @@ class MITDatasetLoader:
         """
         record_path = self.dataset_path / record_id
         record = wfdb.rdrecord(str(record_path), physical=True)
-        annotation = wfdb.rdann(str(record_path), "atr", physical=True)
+        annotation = wfdb.rdann(str(record_path), "atr")
 
         signals = record.p_signal  # shape (N, 2) for MIT-BIH
         return signals, annotation.sample, annotation.symbol
@@ -143,6 +142,7 @@ class MITDatasetLoader:
         self,
         test_size: float = 0.2,
         val_size: float = 0.1,
+        sample_fraction: float = 1.0,
         force_recompute: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Load all MIT records, preprocess, and return train/val/test splits.
@@ -153,6 +153,9 @@ class MITDatasetLoader:
             Fraction of records to reserve for testing. Default: 0.2.
         val_size : float
             Fraction of remaining records to reserve for validation. Default: 0.1.
+        sample_fraction : float
+            Fraction of extracted segments to keep for memory/iteration control.
+            Must be in (0, 1]. Default: 1.0.
         force_recompute : bool
             If True, recompute from raw files (ignore cache). Default: False.
 
@@ -179,9 +182,17 @@ class MITDatasetLoader:
                 data["y_test"],
             )
 
-        logger.info(f"Preprocessing MIT dataset from {len(MIT_RECORDS)} records...")
+        if sample_fraction <= 0.0 or sample_fraction > 1.0:
+            raise ValueError("sample_fraction must be in (0, 1].")
+
+        logger.info(
+            "Preprocessing MIT dataset from %s records (sample_fraction=%s)...",
+            len(MIT_RECORDS),
+            sample_fraction,
+        )
         all_segments = []
         all_labels = []
+        rng = np.random.default_rng(42)
 
         for record_id in MIT_RECORDS:
             try:
@@ -189,16 +200,24 @@ class MITDatasetLoader:
                 segments = self.segment_signals(signals, indices, types)
 
                 for segment, label in segments:
+                    if sample_fraction < 1.0 and rng.random() > sample_fraction:
+                        continue
                     all_segments.append(segment)
                     all_labels.append(label)
-                logger.info(f"✓ Record {record_id}: {len(segments)} segments")
+                logger.info(f"OK Record {record_id}: {len(segments)} segments")
 
             except Exception as e:
-                logger.warning(f"✗ Record {record_id} failed: {e}")
+                logger.warning(f"FAIL Record {record_id} failed: {e}")
                 continue
 
-        X = np.array(all_segments)  # shape (N, 3600, 2)
-        y = np.array(all_labels)    # shape (N,)
+        if not all_segments:
+            raise RuntimeError(
+                "No ECG segments were extracted from MIT-BIH records. "
+                "Check dataset files and loader compatibility."
+            )
+
+        X = np.asarray(all_segments, dtype=np.float32)  # shape (N, 3600, 2)
+        y = np.asarray(all_labels, dtype=np.uint8)      # shape (N,)
 
         logger.info(
             f"Total segments: {X.shape[0]}, "
@@ -224,7 +243,7 @@ class MITDatasetLoader:
         )
 
         # Cache
-        np.savez(
+        np.savez_compressed(
             cache_file,
             X_train=X_train,
             y_train=y_train,

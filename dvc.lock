@@ -21,43 +21,43 @@ stages:
         dataset.cache_dir: data/processed/mit_cache
         dataset.force_recompute: false
         dataset.mit_path: data/MIT_dataset
-        dataset.sample_fraction: 0.05
-        dataset.test_size: 0.2
-        dataset.val_size: 0.1
+        dataset.sample_fraction: 1.0
+        dataset.test_size: 0.1
+        dataset.val_size: 0.2222
     outs:
     - path: data/processed/mit_cache/mit_preprocessed.npz
       hash: md5
-      md5: 76c5e54b302e86b451103058d5dddc07
-      size: 61051988
+      md5: 357a5d771595b8d6550d22d18a0691d5
+      size: 1215824482
   train:
     cmd: python -m src.training.train --config configs/training_config.yaml
     deps:
     - path: configs/training_config.yaml
       hash: md5
-      md5: efbc9f0673aff1373f0edb66283971f2
-      size: 3802
+      md5: 595122e37f215107a383a82a51e0aa08
+      size: 4119
     - path: data/processed/mit_cache/mit_preprocessed.npz
       hash: md5
-      md5: 76c5e54b302e86b451103058d5dddc07
-      size: 61051988
+      md5: 3220ac4557a492dfc074c7991c07079a
+      size: 242375820
     - path: src/ingestion/load_mit_dataset.py
       hash: md5
       md5: f95aadbe2ab9da2882d43067ba5f20b1
       size: 8845
     - path: src/training/model.py
       hash: md5
-      md5: 23c1297a9776cd6f8dd783149aa67316
-      size: 12340
+      md5: ee7d6f56a4de953c205c340456b364db
+      size: 12978
     - path: src/training/train.py
       hash: md5
-      md5: 16559355d7a3fdab9c209452e61a4240
-      size: 10946
+      md5: a3aac9474e08e896a0afc5506dc6aff8
+      size: 12742
     params:
       configs/training_config.yaml:
         mlflow:
           experiment_name: VT-Detection
           run_name: baseline-vgg16-transfer-learning
-          tracking_uri: sqlite:///mlruns.db
+          tracking_uri: sqlite:///mlflow_tracking.db
         model:
           input_shape:
           - 3600
@@ -67,49 +67,52 @@ stages:
         training:
           batch_size: 16
           epochs: 2
+          use_class_weights: true
+          save_best_checkpoint: false
+          early_stopping_patience: 3
     outs:
     - path: models/artifacts/vgg16_best.keras
       hash: md5
-      md5: 6f070a5463db94c0c6bacc77a54cbfb4
-      size: 60733343
+      md5: 9882dc67a6fe04a3c1772aeeab9d2088
+      size: 60733218
     - path: models/metrics.json
       hash: md5
-      md5: d8059e616b9e084f2cc122add02fb872
-      size: 341
+      md5: b64bbdb19cf02fec7f42086db3b76282
+      size: 339
   evaluate:
     cmd: "python -m src.evaluation.pipeline --model models/artifacts/vgg16_best.keras
       --config configs/training_config.yaml --output reports/evaluation_report.json\n"
     deps:
     - path: configs/training_config.yaml
       hash: md5
-      md5: efbc9f0673aff1373f0edb66283971f2
-      size: 3802
+      md5: 595122e37f215107a383a82a51e0aa08
+      size: 4119
     - path: models/artifacts/vgg16_best.keras
       hash: md5
-      md5: 6f070a5463db94c0c6bacc77a54cbfb4
-      size: 60733343
+      md5: 9882dc67a6fe04a3c1772aeeab9d2088
+      size: 60733218
     - path: src/evaluation/evaluate.py
       hash: md5
       md5: f1332ba2cbc2fdc94415904df7dc6d1e
       size: 9174
     - path: src/evaluation/pipeline.py
       hash: md5
-      md5: ff535fe8433b28d5c045af0eedd42966
-      size: 3457
+      md5: ed15d3d22c3240db0aeba602c0cbea7e
+      size: 3865
     outs:
     - path: plots/confusion_matrix.png
       hash: md5
-      md5: 66740c0f0870a1cd53053482ca4f2e00
-      size: 36542
+      md5: 1df6f37c0c5fbd0bc999ac8f4fc556e7
+      size: 41820
     - path: plots/pr_curve.png
       hash: md5
-      md5: 49d339a7862d1226ef58ffe273ef6bf9
-      size: 46714
+      md5: f6583b0ba621fef2adbeb099a1a4c2c3
+      size: 47795
     - path: plots/roc_curve.png
       hash: md5
-      md5: b126fa8f9152d39ec86645d93d0e3849
-      size: 57546
+      md5: eeedf17cee807a6321e5eeeab99ccbb0
+      size: 59284
     - path: reports/evaluation_report.json
       hash: md5
-      md5: 28dd38cbaa50ae1d55db1645bc7ba60a
-      size: 105408
+      md5: 47be4b17bed01443402a8ba9160d93eb
+      size: 404029

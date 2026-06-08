@@ -114,6 +114,42 @@ class VGG16ECGModel:
 
         return images
 
+    def _signal_to_vgg16_image_tf(self, signal: tf.Tensor) -> tf.Tensor:
+        """Convert one ECG sample (3600, 2) to one VGG16 image (224, 224, 3)."""
+        signal = tf.cast(signal, tf.float32)
+
+        # Normalize each lead independently.
+        lead1 = signal[:, 0:1]
+        lead2 = signal[:, 1:2]
+
+        lead1 = (lead1 - tf.reduce_mean(lead1)) / (tf.math.reduce_std(lead1) + 1e-8)
+        lead2 = (lead2 - tf.reduce_mean(lead2)) / (tf.math.reduce_std(lead2) + 1e-8)
+
+        # Resize each lead to image space, then compose pseudo-RGB: [L1, L2, L1].
+        lead1_img = tf.image.resize(tf.expand_dims(lead1, axis=-1), [224, 224], method="bilinear")
+        lead2_img = tf.image.resize(tf.expand_dims(lead2, axis=-1), [224, 224], method="bilinear")
+
+        return tf.concat([lead1_img, lead2_img, lead1_img], axis=-1)
+
+    def _make_dataset(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        batch_size: int,
+        shuffle: bool,
+    ) -> tf.data.Dataset:
+        """Build a memory-safe tf.data pipeline with on-the-fly image conversion."""
+        ds = tf.data.Dataset.from_tensor_slices((X, y))
+        if shuffle:
+            ds = ds.shuffle(min(int(X.shape[0]), 10000), seed=42, reshuffle_each_iteration=True)
+
+        ds = ds.map(
+            lambda sig, lbl: (self._signal_to_vgg16_image_tf(sig), tf.cast(lbl, tf.float32)),
+            num_parallel_calls=tf.data.AUTOTUNE,
+        )
+        ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        return ds
+
     def build(self) -> Model:
         """Build the VGG16 transfer learning model.
 
@@ -177,6 +213,9 @@ class VGG16ECGModel:
         batch_size: int = 32,
         epochs: int = 20,
         checkpoint_path: str = "models/artifacts/vgg16_best.keras",
+        class_weight: dict | None = None,
+        save_best_checkpoint: bool = True,
+        early_stopping_patience: int = 5,
     ) -> dict:
         """Train the model with validation and early stopping.
 
@@ -196,6 +235,12 @@ class VGG16ECGModel:
             Maximum epochs for training. Default: 20.
         checkpoint_path : str
             Path to save best model checkpoint.
+        class_weight : dict | None
+            Optional class weighting for imbalanced datasets.
+        save_best_checkpoint : bool
+            Whether to save a best-model checkpoint at each epoch.
+        early_stopping_patience : int
+            Number of epochs without improvement before early stopping.
 
         Returns
         -------
@@ -206,41 +251,42 @@ class VGG16ECGModel:
             raise ValueError("Model not built. Call .build() first.")
 
         logger.info(
-            f"Preparing data: {X_train.shape[0]} train, {X_val.shape[0]} val"
+            f"Preparing data pipeline: {X_train.shape[0]} train, {X_val.shape[0]} val"
         )
 
-        # Convert signals to VGG16-compatible format
-        X_train_vgg = self._prepare_for_vgg16(X_train)
-        X_val_vgg = self._prepare_for_vgg16(X_val)
-
-        logger.info(f"Data converted: train {X_train_vgg.shape}, val {X_val_vgg.shape}")
+        train_ds = self._make_dataset(X_train, y_train, batch_size=batch_size, shuffle=True)
+        val_ds = self._make_dataset(X_val, y_val, batch_size=batch_size, shuffle=False)
 
         # Callbacks
         callbacks = [
-            ModelCheckpoint(
-                checkpoint_path,
-                monitor="val_auc",
-                mode="max",
-                save_best_only=True,
-                verbose=1,
-            ),
             EarlyStopping(
                 monitor="val_loss",
-                patience=5,
+                patience=early_stopping_patience,
                 restore_best_weights=True,
                 verbose=1,
             ),
         ]
 
+        if save_best_checkpoint:
+            callbacks.insert(
+                0,
+                ModelCheckpoint(
+                    checkpoint_path,
+                    monitor="val_auc",
+                    mode="max",
+                    save_best_only=True,
+                    verbose=1,
+                ),
+            )
+
         # Train
         logger.info(f"Starting training: {epochs} epochs, batch_size={batch_size}")
         history = self.model.fit(
-            X_train_vgg,
-            y_train,
-            validation_data=(X_val_vgg, y_val),
-            batch_size=batch_size,
+            train_ds,
+            validation_data=val_ds,
             epochs=epochs,
             callbacks=callbacks,
+            class_weight=class_weight,
             verbose=1,
         )
 
@@ -251,6 +297,7 @@ class VGG16ECGModel:
         self,
         X_test: np.ndarray,
         y_test: np.ndarray,
+        batch_size: int = 32,
     ) -> dict:
         """Evaluate model on test set.
 
@@ -269,10 +316,10 @@ class VGG16ECGModel:
         if self.model is None:
             raise ValueError("Model not built. Call .build() first.")
 
-        X_test_vgg = self._prepare_for_vgg16(X_test)
-        logger.info(f"Evaluating on {X_test_vgg.shape[0]} test samples")
+        test_ds = self._make_dataset(X_test, y_test, batch_size=batch_size, shuffle=False)
+        logger.info(f"Evaluating on {X_test.shape[0]} test samples")
 
-        results = self.model.evaluate(X_test_vgg, y_test, verbose=0)
+        results = self.model.evaluate(test_ds, verbose=0)
         metrics = {
             name: float(val)
             for name, val in zip(self.model.metrics_names, results)
@@ -297,8 +344,13 @@ class VGG16ECGModel:
         if self.model is None:
             raise ValueError("Model not built. Call .build() first.")
 
-        X_vgg = self._prepare_for_vgg16(X)
-        return self.model.predict(X_vgg, verbose=0).flatten()
+        # Dummy labels are required to reuse the same tf.data conversion path.
+        dummy_y = np.zeros((X.shape[0],), dtype=np.uint8)
+        pred_ds = self._make_dataset(X, dummy_y, batch_size=32, shuffle=False).map(
+            lambda img, _: img,
+            num_parallel_calls=tf.data.AUTOTUNE,
+        )
+        return self.model.predict(pred_ds, verbose=0).flatten()
 
     def save(self, path: str) -> None:
         """Save model to disk.

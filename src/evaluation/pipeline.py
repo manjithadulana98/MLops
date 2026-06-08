@@ -99,12 +99,21 @@ def main():
     print("EVALUATION SUMMARY")
     print("=" * 70)
     binary_metrics = report["binary_metrics"]
+    optimal_metrics = report.get("optimal_threshold_metrics", {})
     print(f"Sensitivity (Recall): {binary_metrics['sensitivity']:.4f}")
     print(f"Specificity:          {binary_metrics['specificity']:.4f}")
     print(f"Precision:            {binary_metrics['precision']:.4f}")
     print(f"F1-Score:             {binary_metrics['f1_score']:.4f}")
     print(f"ROC AUC:              {report['roc_metrics']['roc_auc']:.4f}")
     print(f"Avg Precision:        {report['pr_metrics']['average_precision']:.4f}")
+    if optimal_metrics:
+        print("-" * 70)
+        print(
+            f"Best threshold (F1):  {optimal_metrics['threshold']:.3f} | "
+            f"Sensitivity: {optimal_metrics['sensitivity']:.4f} | "
+            f"Precision: {optimal_metrics['precision']:.4f} | "
+            f"F1: {optimal_metrics['f1_score']:.4f}"
+        )
     print("=" * 70 + "\n")
 
 

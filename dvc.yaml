@@ -14,22 +14,21 @@ stages:
   # Stage 1: Prepare MIT dataset (caching + preprocessing)
   # ──────────────────────────────────────────────────────────────────────────
   prepare:
-    cmd: >
-      python -c "
-      from src.ingestion.load_mit_dataset import MITDatasetLoader;
-      loader = MITDatasetLoader('data/MIT_dataset', 'data/processed/mit_cache');
-      loader.load_and_preprocess_all_records(force_recompute=True);
-      "
+    cmd: python -m src.ingestion.prepare --config configs/training_config.yaml
     deps:
       - data/MIT_dataset
+      - src/ingestion/prepare.py
       - src/ingestion/load_mit_dataset.py
     outs:
       - data/processed/mit_cache/mit_preprocessed.npz
     params:
-      - dataset.mit_path
-      - dataset.cache_dir
-      - dataset.test_size
-      - dataset.val_size
+      - configs/training_config.yaml:
+          - dataset.mit_path
+          - dataset.cache_dir
+          - dataset.test_size
+          - dataset.val_size
+          - dataset.sample_fraction
+          - dataset.force_recompute
 
   # ──────────────────────────────────────────────────────────────────────────
   # Stage 2: Train VGG16 transfer learning model
@@ -48,6 +47,7 @@ stages:
       - models/metrics.json:
           cache: false
     params:
+    - configs/training_config.yaml:
       - model
       - training
       - mlflow
