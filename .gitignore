@@ -9,6 +9,22 @@ dist/
 build/
 .eggs/
 
+# MLflow
+mlruns/
+mlflow*.db
+*.db
+
+# Training artifacts (managed by DVC, not git)
+models/artifacts/
+data/processed/
+reports/
+plots/
+training.log
+prepare_output.log
+
+# venv
+venv/
+
 # Virtual environments
 venv/
 .venv/
