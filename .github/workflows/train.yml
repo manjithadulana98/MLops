@@ -54,7 +54,7 @@ jobs:
           # Retry the full download phase to survive transient PhysioNet/network timeouts.
           for attempt in 1 2 3 4 5; do
             echo "Dataset download attempt ${attempt}/5"
-            python - << 'EOFPYTHON'
+            python3 << 'EOF'
 import os
 import time
 import wfdb
@@ -87,8 +87,9 @@ for rec in records:
             time.sleep(10 * rec_attempt)
 
 print(f"Total records downloaded: {len(records)}")
-EOFPYTHON
-            if [ $? -eq 0 ]; then
+EOF
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 0 ]; then
               echo "Dataset download completed successfully."
               break
             fi
