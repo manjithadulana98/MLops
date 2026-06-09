@@ -61,7 +61,22 @@ jobs:
         run: dvc repro -s prepare --force
 
       - name: DVC train (VGG16 transfer learning)
-        run: dvc repro -s train --force
+        run: |
+          set +e
+          dvc repro -s train --force -v
+          TRAIN_EXIT_CODE=$?
+          echo "DVC train exit code: ${TRAIN_EXIT_CODE}"
+          ls -lah models || true
+          ls -lah models/artifacts || true
+          if [ -f models/metrics.json ]; then
+            echo "=== models/metrics.json ==="
+            cat models/metrics.json
+          else
+            echo "models/metrics.json not found"
+          fi
+          if [ ${TRAIN_EXIT_CODE} -ne 0 ]; then
+            exit ${TRAIN_EXIT_CODE}
+          fi
 
       - name: DVC evaluate (metrics + plots)
         run: dvc repro -s evaluate --force
