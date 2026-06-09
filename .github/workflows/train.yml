@@ -54,41 +54,41 @@ jobs:
           # Retry the full download phase to survive transient PhysioNet/network timeouts.
           for attempt in 1 2 3 4 5; do
             echo "Dataset download attempt ${attempt}/5"
-            if python - <<-PYTHON
-            import os
-            import time
-            import wfdb
+            python - << 'EOFPYTHON'
+import os
+import time
+import wfdb
 
-            os.makedirs('data/MIT_dataset', exist_ok=True)
+os.makedirs('data/MIT_dataset', exist_ok=True)
 
-            # Retry fetching record index first; this is where many timeouts happen.
-            records = None
-            for idx_attempt in range(1, 6):
-                try:
-                    records = wfdb.get_record_list('mitdb')
-                    break
-                except Exception as exc:
-                    print(f"Record list attempt {idx_attempt}/5 failed: {exc}")
-                    if idx_attempt == 5:
-                        raise
-                    time.sleep(15 * idx_attempt)
+# Retry fetching record index first; this is where many timeouts happen.
+records = None
+for idx_attempt in range(1, 6):
+    try:
+        records = wfdb.get_record_list('mitdb')
+        break
+    except Exception as exc:
+        print(f"Record list attempt {idx_attempt}/5 failed: {exc}")
+        if idx_attempt == 5:
+            raise
+        time.sleep(15 * idx_attempt)
 
-            for rec in records:
-                # Retry each record download independently.
-                for rec_attempt in range(1, 4):
-                    try:
-                        wfdb.dl_database('mitdb', dl_dir='data/MIT_dataset', records=[rec])
-                        print(f"Downloaded: {rec}")
-                        break
-                    except Exception as exc:
-                        print(f"Record {rec} attempt {rec_attempt}/3 failed: {exc}")
-                        if rec_attempt == 3:
-                            raise
-                        time.sleep(10 * rec_attempt)
+for rec in records:
+    # Retry each record download independently.
+    for rec_attempt in range(1, 4):
+        try:
+            wfdb.dl_database('mitdb', dl_dir='data/MIT_dataset', records=[rec])
+            print(f"Downloaded: {rec}")
+            break
+        except Exception as exc:
+            print(f"Record {rec} attempt {rec_attempt}/3 failed: {exc}")
+            if rec_attempt == 3:
+                raise
+            time.sleep(10 * rec_attempt)
 
-            print(f"Total records downloaded: {len(records)}")
-            PYTHON
-            then
+print(f"Total records downloaded: {len(records)}")
+EOFPYTHON
+            if [ $? -eq 0 ]; then
               echo "Dataset download completed successfully."
               break
             fi
