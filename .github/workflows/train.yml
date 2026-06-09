@@ -54,14 +54,9 @@ jobs:
           # Retry the full download phase to survive transient PhysioNet/network timeouts.
           for attempt in 1 2 3 4 5; do
             echo "Dataset download attempt ${attempt}/5"
-            python3 << 'EOF'
-import os
-import time
-import wfdb
-
+            python3 - 2>/dev/null << 'ENDPYTHON'
+import os, time, wfdb
 os.makedirs('data/MIT_dataset', exist_ok=True)
-
-# Retry fetching record index first; this is where many timeouts happen.
 records = None
 for idx_attempt in range(1, 6):
     try:
@@ -72,9 +67,7 @@ for idx_attempt in range(1, 6):
         if idx_attempt == 5:
             raise
         time.sleep(15 * idx_attempt)
-
 for rec in records:
-    # Retry each record download independently.
     for rec_attempt in range(1, 4):
         try:
             wfdb.dl_database('mitdb', dl_dir='data/MIT_dataset', records=[rec])
@@ -85,20 +78,16 @@ for rec in records:
             if rec_attempt == 3:
                 raise
             time.sleep(10 * rec_attempt)
-
 print(f"Total records downloaded: {len(records)}")
-EOF
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -eq 0 ]; then
+ENDPYTHON
+            if [ $? -eq 0 ]; then
               echo "Dataset download completed successfully."
               break
             fi
-
             if [ "$attempt" -eq 5 ]; then
               echo "Dataset download failed after 5 attempts."
               exit 1
             fi
-
             sleep $((attempt * 20))
           done
 
@@ -108,16 +97,16 @@ EOF
           SAMPLE_FRACTION: ${{ github.event.inputs.sample_fraction || '1.0' }}
           EPOCHS: ${{ github.event.inputs.epochs || '10' }}
         run: |
-          python - <<-EOF
-            import yaml, os
-            with open('configs/training_config.yaml') as f:
-                cfg = yaml.safe_load(f)
-            cfg['dataset']['sample_fraction'] = float(os.environ['SAMPLE_FRACTION'])
-            cfg['training']['epochs'] = int(os.environ['EPOCHS'])
-            with open('configs/training_config.yaml', 'w') as f:
-                yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
-            print(f"Config: sample_fraction={cfg['dataset']['sample_fraction']}, epochs={cfg['training']['epochs']}")
-          EOF
+          python3 - << 'ENDPYTHON'
+import yaml, os
+with open('configs/training_config.yaml') as f:
+    cfg = yaml.safe_load(f)
+cfg['dataset']['sample_fraction'] = float(os.environ['SAMPLE_FRACTION'])
+cfg['training']['epochs'] = int(os.environ['EPOCHS'])
+with open('configs/training_config.yaml', 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+print(f"Config: sample_fraction={cfg['dataset']['sample_fraction']}, epochs={cfg['training']['epochs']}")
+ENDPYTHON
 
       # ── DVC Pipeline ────────────────────────────────────────────────────
       - name: DVC prepare (data preprocessing)
@@ -166,21 +155,21 @@ EOF
         if: always()
         run: |
           echo "=== EVALUATION SUMMARY ==="
-          python - <<'EOF'
-          import json, sys
-          try:
-              with open('reports/evaluation_report.json') as f:
-                  r = json.load(f)
-              b = r['binary_metrics']
-              o = r.get('optimal_threshold_metrics', {})
-              print(f"Sensitivity:  {b['sensitivity']:.4f}")
-              print(f"Specificity:  {b['specificity']:.4f}")
-              print(f"Precision:    {b['precision']:.4f}")
-              print(f"F1-Score:     {b['f1_score']:.4f}")
-              print(f"ROC AUC:      {r['roc_metrics']['roc_auc']:.4f}")
-              if o:
-                  print(f"Best threshold F1: {o['threshold']:.3f} → Sensitivity {o['sensitivity']:.4f}, F1 {o['f1_score']:.4f}")
-          except Exception as e:
-              print(f"Could not read report: {e}")
-              sys.exit(0)
-          EOF
+          python3 - << 'ENDPYTHON'
+import json, sys
+try:
+    with open('reports/evaluation_report.json') as f:
+        r = json.load(f)
+    b = r['binary_metrics']
+    o = r.get('optimal_threshold_metrics', {})
+    print(f"Sensitivity:  {b['sensitivity']:.4f}")
+    print(f"Specificity:  {b['specificity']:.4f}")
+    print(f"Precision:    {b['precision']:.4f}")
+    print(f"F1-Score:     {b['f1_score']:.4f}")
+    print(f"ROC AUC:      {r['roc_metrics']['roc_auc']:.4f}")
+    if o:
+        print(f"Best threshold F1: {o['threshold']:.3f} → Sensitivity {o['sensitivity']:.4f}, F1 {o['f1_score']:.4f}")
+except Exception as e:
+    print(f"Could not read report: {e}")
+    sys.exit(0)
+ENDPYTHON
