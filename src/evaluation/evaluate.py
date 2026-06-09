@@ -199,7 +199,7 @@ class ModelEvaluator:
         # Annotate cells
         for i in range(2):
             for j in range(2):
-                text = ax.text(
+                ax.text(
                     j, i, cm[i, j],
                     ha="center", va="center",
                     color="white" if cm[i, j] > cm.max() / 2 else "black",

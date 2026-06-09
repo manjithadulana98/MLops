@@ -21,7 +21,6 @@ import numpy as np
 import mlflow
 import yaml
 
-from src.ingestion.validate import validate_ecg_signal, ClinicalDataError
 from src.ingestion.load_mit_dataset import MITDatasetLoader
 from src.training.model import VGG16ECGModel
 

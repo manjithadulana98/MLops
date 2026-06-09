@@ -10,7 +10,7 @@ from src.ingestion.validate import ClinicalDataError, validate_ecg_signal, valid
 
 SR = 360          # sampling rate Hz
 DUR = 10.0        # duration seconds
-N = SR * int(DUR) # expected sample count = 3600
+N = SR * int(DUR)  # expected sample count = 3600
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────

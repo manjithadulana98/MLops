@@ -12,7 +12,6 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader

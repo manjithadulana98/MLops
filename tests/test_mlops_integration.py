@@ -11,12 +11,8 @@ Demonstrates:
 
 import logging
 import sys
-from pathlib import Path
 
 import numpy as np
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader
 from src.training.model import VGG16ECGModel
@@ -123,7 +119,7 @@ def test_mlops_workflow():
 
     try:
         import yaml
-        
+
         # Load config
         with open("configs/training_config.yaml") as f:
             config = yaml.safe_load(f)
