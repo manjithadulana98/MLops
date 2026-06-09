@@ -46,20 +46,60 @@ jobs:
       # DVC needs access to data. Options:
       # A) Pull from DVC remote (S3 / GDrive) — recommended for full dataset
       # B) Download MIT-BIH directly from PhysioNet (shown below)
-      - name: Download MIT-BIH dataset from PhysioNet
+      - name: Download MIT-BIH dataset from PhysioNet (with retries)
         run: |
           mkdir -p data/MIT_dataset
           pip install wfdb
-          python - <<'EOF'
-          import wfdb
-          import os
-          records = wfdb.get_record_list('mitdb')
-          os.makedirs('data/MIT_dataset', exist_ok=True)
-          for rec in records:
-              wfdb.dl_database('mitdb', dl_dir='data/MIT_dataset', records=[rec])
-              print(f"Downloaded: {rec}")
-          print(f"Total records downloaded: {len(records)}")
-          EOF
+
+          # Retry the full download phase to survive transient PhysioNet/network timeouts.
+          for attempt in 1 2 3 4 5; do
+            echo "Dataset download attempt ${attempt}/5"
+            if python - <<'EOF'
+import os
+import time
+import wfdb
+
+os.makedirs('data/MIT_dataset', exist_ok=True)
+
+# Retry fetching record index first; this is where many timeouts happen.
+records = None
+for idx_attempt in range(1, 6):
+    try:
+        records = wfdb.get_record_list('mitdb')
+        break
+    except Exception as exc:
+        print(f"Record list attempt {idx_attempt}/5 failed: {exc}")
+        if idx_attempt == 5:
+            raise
+        time.sleep(15 * idx_attempt)
+
+for rec in records:
+    # Retry each record download independently.
+    for rec_attempt in range(1, 4):
+        try:
+            wfdb.dl_database('mitdb', dl_dir='data/MIT_dataset', records=[rec])
+            print(f"Downloaded: {rec}")
+            break
+        except Exception as exc:
+            print(f"Record {rec} attempt {rec_attempt}/3 failed: {exc}")
+            if rec_attempt == 3:
+                raise
+            time.sleep(10 * rec_attempt)
+
+print(f"Total records downloaded: {len(records)}")
+EOF
+            then
+              echo "Dataset download completed successfully."
+              break
+            fi
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "Dataset download failed after 5 attempts."
+              exit 1
+            fi
+
+            sleep $((attempt * 20))
+          done
 
       # ── Override config with workflow_dispatch inputs ───────────────────
       - name: Apply runtime config overrides
