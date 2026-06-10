@@ -292,6 +292,7 @@ class TrainingPipeline:
                 checkpoint_path = self.config.get("paths", {}).get(
                     "checkpoint", "models/artifacts/vgg16_best.keras"
                 )
+                Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
                 model.save(checkpoint_path)
                 # Skip MLflow artifact logging due to disk space constraints
                 # Model is already saved to models/artifacts/vgg16_best.keras
