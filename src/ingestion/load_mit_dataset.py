@@ -10,6 +10,7 @@ IEC 62304 Traceability
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Tuple
@@ -150,14 +151,17 @@ class MITDatasetLoader:
         Parameters
         ----------
         test_size : float
-            Fraction of records to reserve for testing. Default: 0.2.
+            Fraction of the full dataset to reserve for testing. Default: 0.2.
         val_size : float
-            Fraction of remaining records to reserve for validation. Default: 0.1.
+            Fraction of the full dataset to reserve for validation. Default: 0.1.
         sample_fraction : float
             Fraction of extracted segments to keep for memory/iteration control.
+            Applied before splitting, so train, val and test all shrink.
             Must be in (0, 1]. Default: 1.0.
         force_recompute : bool
             If True, recompute from raw files (ignore cache). Default: False.
+            The cache is also rebuilt automatically if it was created with
+            different test_size / val_size / sample_fraction values.
 
         Returns
         -------
@@ -169,21 +173,36 @@ class MITDatasetLoader:
             Test signals and labels.
         """
         cache_file = self.cache_dir / "mit_preprocessed.npz"
+        split_params = {
+            "test_size": float(test_size),
+            "val_size": float(val_size),
+            "sample_fraction": float(sample_fraction),
+        }
 
         if cache_file.exists() and not force_recompute:
-            logger.info(f"Loading from cache: {cache_file}")
-            data = np.load(cache_file)
-            return (
-                data["X_train"],
-                data["y_train"],
-                data["X_val"],
-                data["y_val"],
-                data["X_test"],
-                data["y_test"],
+            with np.load(cache_file) as data:
+                cached_params = (
+                    json.loads(str(data["params"])) if "params" in data.files else None
+                )
+                if cached_params == split_params:
+                    logger.info(f"Loading from cache: {cache_file}")
+                    return (
+                        data["X_train"],
+                        data["y_train"],
+                        data["X_val"],
+                        data["y_val"],
+                        data["X_test"],
+                        data["y_test"],
+                    )
+            logger.warning(
+                f"Cache {cache_file} was built with {cached_params}, "
+                f"but {split_params} was requested; recomputing."
             )
 
         if sample_fraction <= 0.0 or sample_fraction > 1.0:
             raise ValueError("sample_fraction must be in (0, 1].")
+        if test_size <= 0.0 or val_size <= 0.0 or test_size + val_size >= 1.0:
+            raise ValueError("test_size and val_size must be > 0 and sum to less than 1.")
 
         logger.info(
             "Preprocessing MIT dataset from %s records (sample_fraction=%s)...",
@@ -229,7 +248,8 @@ class MITDatasetLoader:
             X, y, test_size=test_size, random_state=42, stratify=y
         )
 
-        # Val/train split on remaining
+        # Val/train split on remaining. val_size is a fraction of the full
+        # dataset, so rescale it to the fraction of what's left after test.
         X_train, X_val, y_train, y_val = train_test_split(
             X_temp,
             y_temp,
@@ -251,6 +271,7 @@ class MITDatasetLoader:
             y_val=y_val,
             X_test=X_test,
             y_test=y_test,
+            params=np.array(json.dumps(split_params)),
         )
         logger.info(f"Cached preprocessed data to {cache_file}")
 

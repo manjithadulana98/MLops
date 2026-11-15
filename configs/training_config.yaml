@@ -11,13 +11,13 @@ dataset:
   # Cache preprocessed data for faster iteration
   cache_dir: "data/processed/mit_cache"
   
-  # Train/val/test split ratios (70/20/10)
-  # test_size: First split off 10% for test, leaving 90% for train+val
-  # val_size: From remaining 90%, take 22.2% for val (= 20% of original), leaving 70% for train
+  # Train/val/test split ratios (70/20/10), each a fraction of the full dataset.
+  # Whatever isn't test or val is train.
   test_size: 0.1
-  val_size: 0.2222
-  
-  # Sampling fraction (1.0 = use all data; reduces for quick experiments)
+  val_size: 0.2
+
+  # Sampling fraction (1.0 = use all data). Applied before splitting, so
+  # train, val and test all shrink. ~0.01 gives a run that takes minutes on a laptop CPU.
   sample_fraction: 1.0
   
   # Force recompute from raw files (ignore cache)

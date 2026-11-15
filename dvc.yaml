@@ -62,7 +62,9 @@ stages:
       --config configs/training_config.yaml
       --output reports/evaluation_report.json
     deps:
+      - data/processed/mit_cache/mit_preprocessed.npz
       - models/artifacts/vgg16_best.keras
+      - src/ingestion/load_mit_dataset.py
       - src/evaluation/pipeline.py
       - src/evaluation/evaluate.py
       - configs/training_config.yaml

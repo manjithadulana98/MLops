@@ -94,21 +94,18 @@ class TrainingPipeline:
 
         logger.info(f"Loading dataset from {dataset_path}")
 
+        # sample_fraction is applied once, inside the loader, before splitting,
+        # so train/val/test all shrink together. In the DVC pipeline the cache
+        # written by the `prepare` stage is reused here.
         self.loader = MITDatasetLoader(dataset_path, cache_dir)
         X_train, y_train, X_val, y_val, X_test, y_test = (
             self.loader.load_and_preprocess_all_records(
                 test_size=dataset_config.get("test_size", 0.2),
                 val_size=dataset_config.get("val_size", 0.1),
+                sample_fraction=dataset_config.get("sample_fraction", 1.0),
                 force_recompute=dataset_config.get("force_recompute", False),
             )
         )
-
-        # Sampling for quick development iteration (optional)
-        sample_fraction = dataset_config.get("sample_fraction", 1.0)
-        if sample_fraction < 1.0:
-            n_train = int(X_train.shape[0] * sample_fraction)
-            X_train, y_train = X_train[:n_train], y_train[:n_train]
-            logger.info(f"Downsampled training to {n_train} samples")
 
         logger.info(
             f"Dataset loaded: train {X_train.shape}, val {X_val.shape}, "

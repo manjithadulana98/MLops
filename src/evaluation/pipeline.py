@@ -58,8 +58,14 @@ def main():
         dataset_config.get("cache_dir"),
     )
 
+    # Same split parameters as training, so the cached test split is reused
+    # (and never silently swapped for a split built with different settings).
     logger.info("Loading dataset...")
-    _, _, _, _, X_test, y_test = loader.load_and_preprocess_all_records()
+    _, _, _, _, X_test, y_test = loader.load_and_preprocess_all_records(
+        test_size=dataset_config.get("test_size", 0.2),
+        val_size=dataset_config.get("val_size", 0.1),
+        sample_fraction=dataset_config.get("sample_fraction", 1.0),
+    )
 
     # Load model
     logger.info(f"Loading model from {args.model}")

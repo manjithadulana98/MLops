@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import yaml
@@ -15,6 +16,7 @@ from src.ingestion.load_mit_dataset import MITDatasetLoader
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Prepare MIT-BIH cached dataset splits")
     parser.add_argument(
         "--config",
