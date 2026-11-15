@@ -20,7 +20,7 @@ The **[MIT-BIH Arrhythmia Database](https://physionet.org/content/mitdb/1.0.0/)*
 | Resolution | 11-bit over ±5 mV |
 | Annotations | Beat-by-beat labels by two independent cardiologists |
 
-All model checkpoints must achieve the following minimum thresholds on the MIT-BIH hold-out set before being eligible for deployment:
+All model checkpoints must achieve the following minimum thresholds on the MIT-BIH hold-out set before being eligible for deployment. They are enforced by the `gate` DVC stage, which promotes a model to `champion` in the MLflow registry only if every threshold is met; the values live in `configs/training_config.yaml` under `gate.thresholds`:
 
 | Metric | Minimum Threshold |
 |---|---|
@@ -29,7 +29,7 @@ All model checkpoints must achieve the following minimum thresholds on the MIT-B
 | F1-Score | ≥ 0.485 |
 | AUC-ROC | ≥ 0.495 |
 
-These thresholds are derived from **ANSI/AAMI EC57** performance standards for arrhythmia detectors used in medical devices.
+**ANSI/AAMI EC57** defines how arrhythmia detector performance should be tested and reported. The values above are deliberately low placeholders for exercising the pipeline, not clinical acceptance criteria.
 
 ---
 

@@ -1,16 +1,28 @@
 name: Train & Evaluate - VT Detection Pipeline
 
+# Runs the full DVC pipeline: prepare -> train -> evaluate -> gate.
+# - Manual runs (workflow_dispatch) enforce the gate: the job fails if the model
+#   misses gate.thresholds in configs/training_config.yaml, otherwise the new
+#   version is promoted to "champion" in the MLflow registry (which lives only
+#   for this job).
+# - Push runs are report-only: the gate table is shown on the run summary,
+#   but a miss doesn't fail the job and nothing is promoted.
+#
+# Defaults are smoke-test sized: GitHub-hosted runners are CPU-only and cap
+# jobs at 6 hours, and VGG16 on the full dataset takes hours per epoch.
+# Use workflow_dispatch inputs for larger runs (or a self-hosted/GPU runner).
+
 on:
   workflow_dispatch:
     inputs:
       sample_fraction:
-        description: "Fraction of dataset to use (1.0 = full dataset)"
+        description: "Fraction of dataset to use (applies to train/val/test; 1.0 = full)"
         required: false
-        default: "1.0"
+        default: "0.01"
       epochs:
         description: "Number of training epochs"
         required: false
-        default: "10"
+        default: "1"
 
   push:
     branches: ["main"]
@@ -53,8 +65,8 @@ jobs:
 
       - name: Apply runtime config overrides
         env:
-          SAMPLE_FRACTION: ${{ github.event.inputs.sample_fraction || '1.0' }}
-          EPOCHS: ${{ github.event.inputs.epochs || '10' }}
+          SAMPLE_FRACTION: ${{ github.event.inputs.sample_fraction || '0.01' }}
+          EPOCHS: ${{ github.event.inputs.epochs || '1' }}
         run: python3 scripts/ci_update_config.py
 
       - name: DVC prepare (data preprocessing)
@@ -81,6 +93,25 @@ jobs:
       - name: DVC evaluate (metrics + plots)
         run: dvc repro -s evaluate --force
 
+      # Manual runs: enforce the gate. Fails the job if any threshold is missed,
+      # otherwise promotes the new version to "champion".
+      - name: DVC gate (enforced, promotes on pass)
+        if: github.event_name == 'workflow_dispatch'
+        run: dvc repro -s gate --force
+
+      # Push runs train a smoke-sized model that isn't expected to meet the
+      # thresholds, so report the gate result without failing or promoting.
+      - name: Gate (report-only on push)
+        if: github.event_name != 'workflow_dispatch'
+        continue-on-error: true
+        run: |
+          echo "_Report-only: push-triggered smoke run. Run this workflow manually to enforce the gate._" >> "$GITHUB_STEP_SUMMARY"
+          python -m src.evaluation.gate \
+            --config configs/training_config.yaml \
+            --report reports/evaluation_report.json \
+            --output reports/gate.json \
+            --no-promote
+
       - name: Upload evaluation report
         uses: actions/upload-artifact@v4
         if: always()
@@ -88,6 +119,7 @@ jobs:
           name: evaluation-report
           path: |
             reports/evaluation_report.json
+            reports/gate.json
             models/metrics.json
           retention-days: 30
 
@@ -101,6 +133,8 @@ jobs:
 
       - name: Upload trained model
         uses: actions/upload-artifact@v4
+        # Keep the model even when the gate fails, so it can be inspected.
+        if: always()
         with:
           name: vgg16-model
           path: models/artifacts/vgg16_best.keras

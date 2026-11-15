@@ -318,6 +318,30 @@ model = mlflow.tensorflow.load_model("models:/vt-detector@challenger")
 In the MLflow UI, open **Models → vt-detector** to see versions, tags and aliases.
 Set `mlflow.register_model: false` to skip logging the model (e.g. on low-disk machines).
 
+### Promotion Gate
+
+The `gate` DVC stage (`src/evaluation/gate.py`) runs after `evaluate`:
+
+1. Compares `reports/evaluation_report.json` against `gate.thresholds` in
+   `configs/training_config.yaml` (sensitivity, specificity, precision, f1_score,
+   roc_auc, average_precision).
+2. Records the result on the `challenger` version: a `gate=passed|failed` tag, plus
+   `eval_*` metrics on its training run.
+3. If every threshold is met, moves the **`champion`** alias to that version.
+   If not, exits with code 1 (failing `dvc repro` and the CI job) and leaves
+   `champion` where it was.
+
+The result is written to `reports/gate.json` (a DVC metric, so `dvc metrics show`
+includes it). In GitHub Actions the gate table
+also appears on the workflow run's summary page. Use `--no-promote` to check
+thresholds without moving the alias.
+
+**In CI** (`.github/workflows/train.yml`): push-triggered runs train a smoke-sized
+model (1% of data, 1 epoch) that isn't expected to meet the thresholds, so the gate
+is *report-only* there (`--no-promote`, `continue-on-error`). Manual runs
+(**Actions → Train & Evaluate → Run workflow**, where you choose the data fraction
+and epochs) run the real `gate` stage and fail the job on a miss.
+
 > The tracking DB is a local SQLite file, so the registry lives on the machine that
 > trained the model. In CI it is discarded after each run; a shared tracking server
 > is needed for a registry that persists across machines.

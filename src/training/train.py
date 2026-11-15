@@ -25,12 +25,8 @@ import yaml
 from mlflow.tracking import MlflowClient
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader
+from src.registry import CHALLENGER_ALIAS
 from src.training.model import VGG16ECGModel
-
-# Every newly registered version gets this alias. Promotion to "champion"
-# is a separate, metrics-gated step so training alone never changes what
-# downstream consumers load.
-CHALLENGER_ALIAS = "challenger"
 
 # ── Logging configuration ────────────────────────────────────────────────────
 

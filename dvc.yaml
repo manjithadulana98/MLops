@@ -1,11 +1,14 @@
 # DVC Pipeline Definition
 # ──────────────────────────────────────────────────────────────────────────────
-# Orchestrates: data loading → model training → evaluation
+# Orchestrates: data loading → model training → evaluation → promotion gate
 #
 # Usage:
 #   dvc repro              # Run full pipeline
 #   dvc repro -s train     # Run specific stage
 #   dvc dag                # View DAG
+#   dvc exp run -S configs/training_config.yaml:dataset.sample_fraction=0.01 \
+#               -S configs/training_config.yaml:training.epochs=1     # quick experiment
+#   dvc exp show           # compare experiments (params + metrics)
 #
 # IEC 62304 Ref: SRS-PIPELINE-001
 
@@ -73,6 +76,28 @@ stages:
       - plots/roc_curve.png
       - plots/confusion_matrix.png
       - plots/pr_curve.png
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stage 4: Promotion gate — check metrics against gate.thresholds and, if
+  # they pass, promote the MLflow `challenger` version to `champion`.
+  # Fails (non-zero exit) when any threshold is missed.
+  # ──────────────────────────────────────────────────────────────────────────
+  gate:
+    cmd: >
+      python -m src.evaluation.gate
+      --config configs/training_config.yaml
+      --report reports/evaluation_report.json
+      --output reports/gate.json
+    deps:
+      - reports/evaluation_report.json
+      - src/evaluation/gate.py
+      - src/registry.py
+    params:
+      - configs/training_config.yaml:
+          - gate
+    metrics:
+      - reports/gate.json:
+          cache: false
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Parameters tracked across pipeline (allow grid search)
