@@ -281,11 +281,46 @@ best_run = mlflow.search_runs(
     filter_string="metrics.test_auc > 0.99",
     order_by=["metrics.test_auc DESC"],
 ).iloc[0]
-
-# Load model from best run
-model_uri = f"runs://{best_run.run_id}/vgg16_ecg"
-model = mlflow.keras.load_model(model_uri)
 ```
+
+### Model Registry
+
+Each training run logs the trained model and registers it as a new version of
+`vt-detector` (configurable via `mlflow.registered_model_name`). Every version is
+tagged with where it came from:
+
+| Tag | Meaning |
+|---|---|
+| `git_commit` | Commit the training code was run from |
+| `git_dirty` | `true` if there were uncommitted changes (not reproducible from git alone) |
+| `data_md5` | DVC hash of the dataset, from `data/MIT_dataset.dvc` |
+
+New versions get the **`challenger`** alias. The **`champion`** alias is what
+downstream consumers should load; moving it is a separate, metrics-gated step,
+so training alone never changes the production model.
+
+```python
+import mlflow
+from mlflow import MlflowClient
+
+mlflow.set_tracking_uri("sqlite:///mlflow_tracking.db")
+client = MlflowClient()
+
+# Which version is the current challenger, and what was it trained from?
+mv = client.get_model_version_by_alias("vt-detector", "challenger")
+print(mv.version, mv.tags)
+
+# Load a model by alias (input is the 224x224x3 image the model expects;
+# ECG-to-image conversion lives in VGG16ECGModel, not in the logged model)
+model = mlflow.tensorflow.load_model("models:/vt-detector@challenger")
+```
+
+In the MLflow UI, open **Models → vt-detector** to see versions, tags and aliases.
+Set `mlflow.register_model: false` to skip logging the model (e.g. on low-disk machines).
+
+> The tracking DB is a local SQLite file, so the registry lives on the machine that
+> trained the model. In CI it is discarded after each run; a shared tracking server
+> is needed for a registry that persists across machines.
 
 ---
 

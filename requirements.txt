@@ -22,7 +22,7 @@ dvc[s3]>=3.0.0           # optional: for S3 remote storage
 great_expectations>=0.18.0
 
 # Experiment tracking & model management
-mlflow>=2.5.0
+mlflow>=3.0.0            # Model Registry aliases + log_model(name=...)
 
 # Visualization
 matplotlib>=3.7.0

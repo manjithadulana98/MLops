@@ -73,6 +73,12 @@ mlflow:
   # MLflow tracking URI (fresh SQLite DB - avoids file-store deprecation)
   tracking_uri: "sqlite:///mlflow_tracking.db"
 
+  # Model Registry: log the trained model and register it as a new version
+  # of this model. New versions get the "challenger" alias; promotion to
+  # "champion" is a separate, metrics-gated step.
+  register_model: true
+  registered_model_name: "vt-detector"
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Paths

@@ -15,14 +15,22 @@ import argparse
 import json
 import logging.config
 import os
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import mlflow
+import mlflow.tensorflow
 import yaml
+from mlflow.tracking import MlflowClient
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader
 from src.training.model import VGG16ECGModel
+
+# Every newly registered version gets this alias. Promotion to "champion"
+# is a separate, metrics-gated step so training alone never changes what
+# downstream consumers load.
+CHALLENGER_ALIAS = "challenger"
 
 # ── Logging configuration ────────────────────────────────────────────────────
 
@@ -215,6 +223,73 @@ class TrainingPipeline:
 
         return metrics
 
+    def lineage_tags(self) -> dict:
+        """Collect the code and data versions this model was trained from.
+
+        Returns
+        -------
+        tags : dict
+            git_commit, git_dirty and data_md5 (the DVC hash of the dataset).
+        """
+        tags = {}
+        try:
+            tags["git_commit"] = subprocess.run(
+                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            # A model trained from uncommitted code can't be reproduced from git alone.
+            tags["git_dirty"] = str(bool(status)).lower()
+        except (OSError, subprocess.CalledProcessError):
+            tags["git_commit"] = "unknown"
+
+        mit_path = self.config.get("dataset", {}).get("mit_path", "data/MIT_dataset")
+        dvc_file = Path(f"{mit_path}.dvc")
+        if dvc_file.exists():
+            with dvc_file.open(encoding="utf-8") as f:
+                outs = yaml.safe_load(f).get("outs", [{}])
+            tags["data_md5"] = outs[0].get("md5", "unknown")
+        else:
+            tags["data_md5"] = "untracked"
+
+        return tags
+
+    def register_model(self, model: VGG16ECGModel, lineage: dict) -> str:
+        """Log the trained model to MLflow and register it as a new challenger version.
+
+        Parameters
+        ----------
+        model : VGG16ECGModel
+            Trained model.
+        lineage : dict
+            Tags linking the version to its code and data (see ``lineage_tags``).
+
+        Returns
+        -------
+        version : str
+            The new model version number in the registry.
+        """
+        name = self.config.get("mlflow", {}).get("registered_model_name", "vt-detector")
+
+        model_info = mlflow.tensorflow.log_model(model.model, name="model")
+        model_version = mlflow.register_model(model_info.model_uri, name)
+
+        client = MlflowClient()
+        for key, value in lineage.items():
+            client.set_model_version_tag(name, model_version.version, key, value)
+        client.set_registered_model_alias(name, CHALLENGER_ALIAS, model_version.version)
+
+        logger.info(
+            f"Registered {name} version {model_version.version} "
+            f"(alias '{CHALLENGER_ALIAS}', commit {lineage.get('git_commit', '?')[:7]}, "
+            f"data {lineage.get('data_md5', '?')[:8]})"
+        )
+        return model_version.version
+
     def run(self) -> None:
         """Execute the full training pipeline with MLflow logging."""
         mlflow_config = self.config.get("mlflow", {})
@@ -239,8 +314,10 @@ class TrainingPipeline:
 
         with mlflow.start_run(run_name=run_name):
             try:
-                # Log configuration
+                # Log configuration and code/data lineage
                 mlflow.log_params(self.flatten_dict(self.config))
+                lineage = self.lineage_tags()
+                mlflow.set_tags(lineage)
 
                 # Load data
                 X_train, y_train, X_val, y_val, X_test, y_test = self.load_dataset()
@@ -294,9 +371,13 @@ class TrainingPipeline:
                 )
                 Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
                 model.save(checkpoint_path)
-                # Skip MLflow artifact logging due to disk space constraints
-                # Model is already saved to models/artifacts/vgg16_best.keras
-                # logger.info(f"Model artifact logged: {checkpoint_path}")
+
+                # Register in the MLflow Model Registry (can be disabled on
+                # low-disk machines; the .keras checkpoint above is still saved).
+                if mlflow_config.get("register_model", True):
+                    self.register_model(model, lineage)
+                else:
+                    logger.info("Model registry disabled (mlflow.register_model=false)")
 
                 logger.info("Training pipeline completed successfully")
                 logger.info(f"MLflow run: {mlflow.active_run().info.run_id}")
