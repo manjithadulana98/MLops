@@ -1,209 +1,179 @@
 """
-Complete end-to-end MLOps workflow integration test
-====================================================
+MLOps pipeline integration tests
+================================
 
-Demonstrates:
-1. Load MIT-BIH dataset
-2. Train VGG16 transfer learning model
-3. Evaluate with comprehensive metrics
-4. Track experiments with MLflow
+Covers the pieces the DVC pipeline wires together:
+
+1. MIT-BIH loading, splitting and cache behaviour (needs data/MIT_dataset)
+2. Model build / train / evaluate / predict / save / load on synthetic signals
+3. MLflow Model Registry: registration, challenger alias and lineage tags
+
+Tests that need the real dataset are *skipped* (not silently passed) when it
+isn't present, e.g. in CI. Fetch it with `dvc pull`. They use a single record
+so they run in seconds; nothing is written outside pytest's tmp_path.
 """
 
-import logging
-import sys
+from __future__ import annotations
 
+from pathlib import Path
+
+import mlflow
 import numpy as np
+import pytest
+from mlflow import MlflowClient
 
+from src.ingestion import load_mit_dataset
 from src.ingestion.load_mit_dataset import MITDatasetLoader
-from src.training.model import VGG16ECGModel
 from src.ingestion.validate import validate_ecg_signal
+from src.training.model import VGG16ECGModel
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+DATASET = Path("data/MIT_dataset")
+# Record 119 has ~400 ventricular beats, so stratified splits have both classes.
+FAST_RECORD = "119"
+
+needs_dataset = pytest.mark.skipif(
+    not (DATASET / f"{FAST_RECORD}.hea").exists(),
+    reason="MIT-BIH dataset not present (run `dvc pull`)",
 )
-logger = logging.getLogger(__name__)
 
 
-def test_dataset_loading():
-    """Test: Load and validate MIT dataset samples."""
-    logger.info("=" * 70)
-    logger.info("TEST 1: Dataset Loading & Validation")
-    logger.info("=" * 70)
+def synthetic_ecg(n: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Small batch of ECG-shaped signals (n, 3600, 2) with alternating labels."""
+    rng = np.random.default_rng(seed)
+    t = np.linspace(0, 10, 3600, dtype=np.float32)
+    base = np.sin(2 * np.pi * 1.2 * t)[None, :, None]
+    X = base + 0.1 * rng.standard_normal((n, 3600, 2))
+    y = np.arange(n) % 2
+    return X.astype(np.float32), y.astype(np.uint8)
 
+
+@pytest.fixture(scope="module")
+def built_model() -> VGG16ECGModel:
+    model = VGG16ECGModel(input_shape=(3600, 2), dropout_rate=0.5, learning_rate=1e-3)
+    model.build()
+    return model
+
+
+# ── 1. Data ──────────────────────────────────────────────────────────────────
+
+
+@needs_dataset
+def test_load_record_and_validate(tmp_path):
+    loader = MITDatasetLoader(DATASET, cache_dir=tmp_path)
+    signals, indices, types = loader.load_record(FAST_RECORD)
+
+    assert signals.ndim == 2 and signals.shape[1] == 2
+    assert len(indices) == len(types) > 0
+    validate_ecg_signal(signals[:3600, 0])  # raises if the signal is non-compliant
+
+
+@needs_dataset
+def test_split_proportions_and_sampling(tmp_path, monkeypatch):
+    monkeypatch.setattr(load_mit_dataset, "MIT_RECORDS", [FAST_RECORD])
+    loader = MITDatasetLoader(DATASET, cache_dir=tmp_path)
+
+    full = loader.load_and_preprocess_all_records(
+        test_size=0.1, val_size=0.2, sample_fraction=1.0, force_recompute=True
+    )
+    X_tr, y_tr, X_va, y_va, X_te, y_te = loader.load_and_preprocess_all_records(
+        test_size=0.1, val_size=0.2, sample_fraction=0.5, force_recompute=True
+    )
+
+    n_full = sum(len(a) for a in full[::2])
+    n = len(X_tr) + len(X_va) + len(X_te)
+    # sample_fraction shrinks every split, not just train
+    assert n == pytest.approx(0.5 * n_full, rel=0.1)
+    assert len(X_te) / n == pytest.approx(0.1, abs=0.02)
+    assert len(X_va) / n == pytest.approx(0.2, abs=0.02)
+    assert X_tr.shape[1:] == (3600, 2)
+    for labels in (y_tr, y_va, y_te):
+        assert set(np.unique(labels)) == {0, 1}
+
+
+@needs_dataset
+def test_cache_reused_only_for_same_split_params(tmp_path, monkeypatch):
+    monkeypatch.setattr(load_mit_dataset, "MIT_RECORDS", [FAST_RECORD])
+    loader = MITDatasetLoader(DATASET, cache_dir=tmp_path)
+    params = dict(test_size=0.1, val_size=0.2, sample_fraction=0.5)
+
+    first = loader.load_and_preprocess_all_records(**params)
+    cached = loader.load_and_preprocess_all_records(**params)
+    np.testing.assert_array_equal(first[4], cached[4])
+
+    # A different split must not be served from the stale cache.
+    resplit = loader.load_and_preprocess_all_records(**{**params, "test_size": 0.3})
+    assert len(resplit[4]) > 2 * len(first[4])
+
+
+# ── 2. Model ─────────────────────────────────────────────────────────────────
+
+
+def test_model_architecture(built_model):
+    keras_model = built_model.model
+    assert keras_model.input_shape == (None, 224, 224, 3)
+    assert keras_model.output_shape == (None, 1)
+    assert not keras_model.layers[0].trainable  # VGG16 base stays frozen
+
+
+def test_train_evaluate_save_load(built_model, tmp_path):
+    X, y = synthetic_ecg(8)
+
+    history = built_model.train(
+        X[:4], y[:4], X[4:6], y[4:6],
+        batch_size=2,
+        epochs=1,
+        checkpoint_path=str(tmp_path / "ckpt.keras"),
+        save_best_checkpoint=False,
+    )
+    assert len(history["loss"]) == 1 and np.isfinite(history["loss"][0])
+
+    metrics = built_model.evaluate(X[6:], y[6:], batch_size=2)
+    assert {"loss", "accuracy", "auc"} <= metrics.keys()
+
+    preds = built_model.predict(X[6:])
+    assert preds.shape == (2,)
+    assert np.all((preds >= 0) & (preds <= 1))
+
+    path = tmp_path / "model.keras"
+    built_model.save(str(path))
+    reloaded = VGG16ECGModel()
+    reloaded.load(str(path))
+    np.testing.assert_allclose(reloaded.predict(X[6:]), preds, rtol=1e-4, atol=1e-6)
+
+
+# ── 3. Model Registry ────────────────────────────────────────────────────────
+
+
+def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path):
+    from src.training.train import CHALLENGER_ALIAS, TrainingPipeline
+
+    name = "vt-detector-test"
+    previous_uri = mlflow.get_tracking_uri()
+    mlflow.set_tracking_uri(f"sqlite:///{(tmp_path / 'mlflow.db').as_posix()}")
     try:
-        loader = MITDatasetLoader("data/MIT_dataset", "data/processed/mit_cache")
-
-        # Load a small sample to verify format
-        logger.info("Loading sample records...")
-        signals, indices, types = loader.load_record("100")
-
-        logger.info(f"✓ Loaded record 100: shape={signals.shape}")
-
-        # Validate a 10-second segment
-        segment = signals[:3600, 0]  # first 10s, lead 1
-        validate_ecg_signal(segment)
-        logger.info("✓ Sample validation passed (signal compliance OK)")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"✗ Dataset loading failed: {e}", exc_info=True)
-        return False
-
-
-def test_model_build():
-    """Test: Build VGG16 model architecture."""
-    logger.info("\n" + "=" * 70)
-    logger.info("TEST 2: Model Architecture & Build")
-    logger.info("=" * 70)
-
-    try:
-        model = VGG16ECGModel(
-            input_shape=(3600, 2),
-            dropout_rate=0.5,
-            learning_rate=1e-3,
+        exp_id = mlflow.create_experiment(
+            "registry-test", artifact_location=(tmp_path / "artifacts").as_uri()
         )
-        model.build()
-
-        logger.info("✓ VGG16 model built successfully")
-        logger.info(f"  Total parameters: {model.model.count_params():,}")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"✗ Model build failed: {e}", exc_info=True)
-        return False
-
-
-def test_data_preparation():
-    """Test: Prepare data for training."""
-    logger.info("\n" + "=" * 70)
-    logger.info("TEST 3: Data Preparation & Splitting")
-    logger.info("=" * 70)
-
-    try:
-        loader = MITDatasetLoader("data/MIT_dataset", "data/processed/mit_cache")
-
-        # Load with small sample fraction for speed
-        X_train, y_train, X_val, y_val, X_test, y_test = (
-            loader.load_and_preprocess_all_records(
-                test_size=0.2,
-                val_size=0.1,
-                force_recompute=False,
-            )
+        pipeline = TrainingPipeline(
+            {"dataset": {"mit_path": str(DATASET)}, "mlflow": {"registered_model_name": name}}
         )
 
-        logger.info("✓ Data splits created:")
-        logger.info(f"  Train: {X_train.shape} (VT ratio: {np.mean(y_train):.1%})")
-        logger.info(f"  Val:   {X_val.shape} (VT ratio: {np.mean(y_val):.1%})")
-        logger.info(f"  Test:  {X_test.shape} (VT ratio: {np.mean(y_test):.1%})")
+        lineage = pipeline.lineage_tags()
+        assert len(lineage["git_commit"]) == 40
+        assert lineage["git_dirty"] in {"true", "false"}
+        assert lineage["data_md5"].endswith(".dir")  # read from data/MIT_dataset.dvc
 
-        # Verify signal validity
-        validate_ecg_signal(X_train[0, :, 0])
-        validate_ecg_signal(X_train[0, :, 1])
-        logger.info("✓ Sample signals pass clinical validation")
+        with mlflow.start_run(experiment_id=exp_id):
+            v1 = pipeline.register_model(built_model, lineage)
+        with mlflow.start_run(experiment_id=exp_id):
+            v2 = pipeline.register_model(built_model, lineage)
 
-        return True
-
-    except Exception as e:
-        logger.error(f"✗ Data preparation failed: {e}", exc_info=True)
-        return False
-
-
-def test_mlops_workflow():
-    """Test: End-to-end MLOps workflow (mini-version for CI)."""
-    logger.info("\n" + "=" * 70)
-    logger.info("TEST 4: MLOps Workflow (Integration Test)")
-    logger.info("=" * 70)
-
-    try:
-        import yaml
-
-        # Load config
-        with open("configs/training_config.yaml") as f:
-            config = yaml.safe_load(f)
-
-        # Adjust for quick test
-        config["dataset"]["sample_fraction"] = 0.05  # Use only 5% of data
-        config["training"]["epochs"] = 2
-        config["training"]["batch_size"] = 16
-
-        logger.info("Loading dataset (5% sample for speed)...")
-        loader = MITDatasetLoader(
-            config["dataset"]["mit_path"],
-            config["dataset"]["cache_dir"],
-        )
-        X_train, y_train, X_val, y_val, X_test, y_test = (
-            loader.load_and_preprocess_all_records(
-                test_size=config["dataset"]["test_size"],
-                val_size=config["dataset"]["val_size"],
-                force_recompute=False,
-            )
-        )
-        # Apply sampling
-        n_train = int(X_train.shape[0] * 0.05)
-        X_train, y_train = X_train[:n_train], y_train[:n_train]
-
-        logger.info(f"Using {X_train.shape[0]} training samples for speed")
-
-        logger.info("Building model...")
-        model = VGG16ECGModel(
-            input_shape=tuple(config["model"]["input_shape"]),
-            dropout_rate=config["model"]["dropout_rate"],
-            learning_rate=config["model"]["learning_rate"],
-        )
-        model.build()
-
-        logger.info("Training (2 epochs)...")
-        history = model.train(
-            X_train, y_train,
-            X_val, y_val,
-            batch_size=config["training"]["batch_size"],
-            epochs=config["training"]["epochs"],
-            checkpoint_path="models/artifacts/test_vgg16.keras",
-        )
-
-        logger.info("✓ Training completed successfully")
-        logger.info(f"  Final train loss: {history['loss'][-1]:.4f}")
-        logger.info(f"  Final val loss: {history['val_loss'][-1]:.4f}")
-
-        logger.info("Evaluating...")
-        metrics = model.evaluate(X_test, y_test)
-        logger.info("✓ Evaluation completed")
-        logger.info(f"  Test accuracy: {metrics['accuracy']:.4f}")
-        logger.info(f"  Test AUC: {metrics['auc']:.4f}")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"✗ MLOps workflow failed: {e}", exc_info=True)
-        return False
-
-
-if __name__ == "__main__":
-    logger.info("STARTING MLOPS INTEGRATION TESTS\n")
-
-    results = {
-        "Dataset Loading": test_dataset_loading(),
-        "Model Build": test_model_build(),
-        "Data Preparation": test_data_preparation(),
-        "MLOps Workflow": test_mlops_workflow(),
-    }
-
-    logger.info("\n" + "=" * 70)
-    logger.info("TEST SUMMARY")
-    logger.info("=" * 70)
-    for test_name, passed in results.items():
-        status = "✓ PASS" if passed else "✗ FAIL"
-        logger.info(f"{test_name:.<40} {status}")
-
-    all_passed = all(results.values())
-    logger.info("=" * 70)
-
-    if all_passed:
-        logger.info("✓ All tests passed! MLOps pipeline is ready.")
-        sys.exit(0)
-    else:
-        logger.warning("✗ Some tests failed. Review logs above.")
-        sys.exit(1)
+        client = MlflowClient()
+        challenger = client.get_model_version_by_alias(name, CHALLENGER_ALIAS)
+        # The alias follows the newest version; older versions stay in the registry.
+        assert (str(v1), str(v2)) == ("1", "2")
+        assert str(challenger.version) == str(v2)
+        assert client.get_model_version(name, v1).tags == lineage
+        assert challenger.tags == lineage
+    finally:
+        mlflow.set_tracking_uri(previous_uri)
