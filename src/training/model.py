@@ -319,11 +319,11 @@ class VGG16ECGModel:
         test_ds = self._make_dataset(X_test, y_test, batch_size=batch_size, shuffle=False)
         logger.info(f"Evaluating on {X_test.shape[0]} test samples")
 
-        results = self.model.evaluate(test_ds, verbose=0)
-        metrics = {
-            name: float(val)
-            for name, val in zip(self.model.metrics_names, results)
-        }
+        # return_dict keeps names attached to values. Zipping metrics_names with
+        # the result list breaks on Keras 3, where metrics_names collapses to
+        # ["loss", "compile_metrics"] and accuracy/auc get dropped.
+        results = self.model.evaluate(test_ds, verbose=0, return_dict=True)
+        metrics = {name: float(val) for name, val in results.items()}
 
         logger.info(f"Test metrics: {metrics}")
         return metrics
