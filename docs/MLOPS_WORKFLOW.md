@@ -405,6 +405,88 @@ python scripts/predict_request.py --url http://127.0.0.1:5002/invocations --reco
 > trained the model. In CI it is discarded after each run; a shared tracking server
 > is needed for a registry that persists across machines.
 
+### Monitoring & Drift Detection
+
+Once a model is serving, the question becomes: does the traffic it receives still
+look like the data it was trained and tested on? Live traffic has no labels, so
+accuracy can't be measured directly. Instead the inputs and the model's outputs are
+compared with a **reference profile** built from the held-out test split, using
+[Evidently](https://docs.evidentlyai.com/).
+
+```
+served model ──(VT_PREDICTION_LOG_DIR)──► monitoring/predictions/*.jsonl ─┐
+                                                                          ├─► src.monitoring.drift ─► reports/drift/ + MLflow
+dvc stage `reference` ──► data/monitoring/reference.csv ──────────────────┘
+```
+
+**What is compared.** Each 10-second window is reduced to a few features
+(`src/monitoring/features.py`), computed the same way on both sides:
+
+| Feature (per lead) | What moves it |
+|---|---|
+| `mean_mv` | baseline offset, electrode/DC problems |
+| `std_mv`, `ptp_mv` | amplifier gain, electrode placement |
+| `noise_mv` (std of sample-to-sample change) | muscle noise, mains hum |
+| `heart_rate_bpm` (lead 1) | a different patient population; also noise, which breaks beat detection |
+| `prediction` | the model's output: prediction drift |
+
+Each column gets a two-sample Kolmogorov–Smirnov test (drifted if p < 0.05); the
+traffic counts as drifted when at least 30% of the columns (3 of 10) drift
+(`--drift-share`). Evidently's default is 50%, but about 0.5 columns drift by chance
+at p < 0.05, and a single-cause problem only moves the columns it touches: simulated
+electrode noise moved 4 columns, which a 50% rule misses.
+
+With the 1% smoke-test data the reference is only ~120 windows, so it is itself a
+noisy sample (one column can look drifted on clean traffic); a full-data reference
+(~11k windows) makes the check much steadier.
+
+**1. Build the reference profile** (a DVC stage, after `train`; also run in CI):
+
+```powershell
+dvc repro -s reference     # -> data/monitoring/reference.csv
+```
+
+**2. Serve with prediction logging on.** The served model appends one JSON line per
+scored window (features + prediction, no raw signal) and one per rejected request,
+stamped with the training run that produced the model:
+
+```powershell
+$env:MLFLOW_TRACKING_URI = "sqlite:///mlflow_tracking.db"
+$env:VT_PREDICTION_LOG_DIR = "monitoring/predictions"
+mlflow models serve -m "models:/vt-detector@champion" -p 5001 --env-manager local
+
+# Docker: pass the variable and mount a directory for the logs
+docker run --rm -p 5002:8080 -e VT_PREDICTION_LOG_DIR=/logs -v ${PWD}/monitoring/predictions:/logs vt-detector:v4
+```
+
+Only versions registered after this feature was added log anything (the logging code
+is bundled with each version). Wrong-shape requests are refused by MLflow's signature
+check before the model runs, so they appear in the server log, not the prediction log.
+
+**3. Generate traffic.** `scripts/simulate_traffic.py` sends beat-centred MIT-BIH
+windows, optionally with a simulated problem (`--drift gain|noise|baseline`):
+
+```powershell
+python scripts/simulate_traffic.py --windows 150                 # looks like the reference
+python scripts/simulate_traffic.py --windows 150 --drift noise   # noisy electrodes
+```
+
+**4. Check for drift:**
+
+```powershell
+python -m src.monitoring.drift --log-dir monitoring/predictions --since 30m
+```
+
+- Writes `reports/drift/drift_report.html` (Evidently's interactive report: per-column
+  distributions and test results) and `reports/drift/drift.json`.
+- Records a run in the MLflow experiment **vt-detector-monitoring** (drift scores,
+  rejection rate, the report as an artifact), so drift checks can be compared over time
+  in the MLflow UI.
+- `--since` takes an ISO time or `30m` / `2h` / `1d`. Fewer than 30 scored windows
+  (`--min-windows`) is reported as "not enough traffic" instead of tested.
+- Exits 0; add `--fail-on-drift` to exit 1 on drift, e.g. in a scheduled job that
+  should alert.
+
 ---
 
 ## DVC Pipelines & Reproducibility
@@ -617,10 +699,10 @@ mlflow ui --host 0.0.0.0 --port 5000
    - Deploy via Kubernetes / Cloud Run
    - Set up API for real-time inference
 
-3. **Monitoring in production**:
-   - Track data drift on incoming ECG signals
-   - Monitor model predictions & confidence
-   - Retrain on new data periodically
+3. **Monitoring in production** (input/prediction drift is covered above):
+   - Run the drift check on a schedule and alert on `--fail-on-drift`
+   - Collect labels for a sample of live windows to track real accuracy
+   - Retrain on new data when drift persists
 
 ---
 

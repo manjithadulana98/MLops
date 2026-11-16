@@ -1,5 +1,5 @@
 # Core data processing & numerical computing
-pandas>=2.0.0
+pandas>=2.0.0,<3          # evidently 0.7 imports pandas internals removed in 3.0
 numpy>=1.24.0
 scipy>=1.11.0
 
@@ -23,6 +23,9 @@ great_expectations>=0.18.0
 
 # Experiment tracking & model management
 mlflow>=3.0.0            # Model Registry aliases + log_model(name=...)
+
+# Monitoring (input / prediction drift reports)
+evidently>=0.7.0,<0.8    # 0.7 API: Report / Dataset / DataDefinition
 
 # Visualization
 matplotlib>=3.7.0

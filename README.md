@@ -53,7 +53,9 @@ MLops/
 │   ├── ingestion/
 │   │   └── validate.py             # Clinical data validation (SU-INGEST-01)
 │   ├── training/                   # Model architecture & training loop
-│   └── evaluation/                 # Metrics, confusion matrix, ROC curves
+│   ├── evaluation/                 # Metrics, plots, promotion gate
+│   ├── serving/                    # MLflow pyfunc wrapper (served model)
+│   └── monitoring/                 # Prediction logging & drift detection (Evidently)
 ├── tests/
 │   └── test_validate.py            # Unit tests (TC-001 – TC-009)
 ├── requirements.txt

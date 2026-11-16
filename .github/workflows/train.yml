@@ -1,6 +1,6 @@
 name: Train & Evaluate - VT Detection Pipeline
 
-# Runs the full DVC pipeline: prepare -> train -> evaluate -> gate.
+# Runs the full DVC pipeline: prepare -> train -> evaluate -> reference -> gate.
 # - Manual runs (workflow_dispatch) enforce the gate: the job fails if the model
 #   misses gate.thresholds in configs/training_config.yaml, otherwise the new
 #   version is promoted to "champion" in the MLflow registry (which lives only
@@ -93,6 +93,9 @@ jobs:
       - name: DVC evaluate (metrics + plots)
         run: dvc repro -s evaluate --force
 
+      - name: DVC reference (drift-monitoring baseline)
+        run: dvc repro -s reference --force
+
       # Manual runs: enforce the gate. Fails the job if any threshold is missed,
       # otherwise promotes the new version to "champion".
       - name: DVC gate (enforced, promotes on pass)
@@ -121,6 +124,7 @@ jobs:
             reports/evaluation_report.json
             reports/gate.json
             models/metrics.json
+            data/monitoring/reference.csv
           retention-days: 30
 
       - name: Upload plots

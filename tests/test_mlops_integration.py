@@ -145,7 +145,9 @@ def test_train_evaluate_save_load(built_model, tmp_path):
 # ── 3. Model Registry ────────────────────────────────────────────────────────
 
 
-def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path):
+def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path, monkeypatch):
+    from src.monitoring.features import FEATURE_COLUMNS
+    from src.monitoring.prediction_log import LOG_DIR_ENV, read_prediction_logs
     from src.training.train import CHALLENGER_ALIAS, TrainingPipeline
 
     name = "vt-detector-test"
@@ -179,6 +181,9 @@ def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path)
         assert challenger.tags == lineage
 
         # The registered version is a self-contained pyfunc: raw ECG in, probability out.
+        # The log directory is read when the model loads, as in a server process.
+        log_dir = tmp_path / "predictions"
+        monkeypatch.setenv(LOG_DIR_ENV, str(log_dir))
         served = mlflow.pyfunc.load_model(f"models:/{name}@{CHALLENGER_ALIAS}")
         assert served.metadata.get_input_schema().inputs[0].shape == (-1, 3600, 2)
         np.testing.assert_allclose(
@@ -189,5 +194,14 @@ def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path)
             served.predict(X * 100)  # ~130 mV: outside the +/-5 mV physiological range
         with pytest.raises(MlflowException, match="shape"):
             served.predict(np.zeros((1, 100, 2), dtype=np.float32))
+
+        # Scored and clinically rejected requests are logged for monitoring, stamped
+        # with the training run. The wrong-shape request isn't: MLflow's signature
+        # check refuses it before the model's predict() runs.
+        scored, rejected = read_prediction_logs(log_dir)
+        assert len(scored) == len(X)
+        assert set(FEATURE_COLUMNS + ["prediction"]) <= set(scored.columns)
+        assert set(scored["model_run_id"]) == {challenger.run_id}
+        assert rejected[["reason", "n_windows"]].values.tolist() == [["VOLTAGE_RANGE", len(X)]]
     finally:
         mlflow.set_tracking_uri(previous_uri)

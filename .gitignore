@@ -18,6 +18,7 @@ mlflow*.db
 models/artifacts/
 data/processed/
 reports/
+/monitoring/
 plots/
 training.log
 prepare_output.log

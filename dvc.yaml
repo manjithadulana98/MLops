@@ -1,6 +1,7 @@
 # DVC Pipeline Definition
 # ──────────────────────────────────────────────────────────────────────────────
-# Orchestrates: data loading → model training → evaluation → promotion gate
+# Orchestrates: data loading → model training → evaluation → promotion gate,
+#               plus the reference profile used for drift monitoring
 #
 # Usage:
 #   dvc repro              # Run full pipeline
@@ -98,6 +99,32 @@ stages:
     metrics:
       - reports/gate.json:
           cache: false
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stage 5: Reference profile for drift monitoring — monitoring features and
+  # model predictions on the test split. Served traffic is compared against
+  # it by `python -m src.monitoring.drift` (not a pipeline stage: it runs on
+  # live prediction logs, not on versioned data).
+  # ──────────────────────────────────────────────────────────────────────────
+  reference:
+    cmd: >
+      python -m src.monitoring.reference
+      --config configs/training_config.yaml
+      --model models/artifacts/vgg16_best.keras
+      --output data/monitoring/reference.csv
+    deps:
+      - data/processed/mit_cache/mit_preprocessed.npz
+      - models/artifacts/vgg16_best.keras
+      - src/ingestion/load_mit_dataset.py
+      - src/monitoring/features.py
+      - src/monitoring/reference.py
+    params:
+      - configs/training_config.yaml:
+          - dataset.test_size
+          - dataset.val_size
+          - dataset.sample_fraction
+    outs:
+      - data/monitoring/reference.csv
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Parameters tracked across pipeline (allow grid search)

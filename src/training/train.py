@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import mlflow
+import scipy
 import tensorflow as tf
 import yaml
 from mlflow.models import infer_signature
@@ -297,10 +298,13 @@ class TrainingPipeline:
             code_paths=[str(SRC_DIR)],
             signature=signature,
             input_example=input_example,
+            # Stamped on every prediction-log record (see src/monitoring).
+            model_config={"run_id": mlflow.active_run().info.run_id},
             pip_requirements=[
                 f"mlflow=={mlflow.__version__}",
                 f"tensorflow=={tf.__version__}",
                 f"numpy=={np.__version__}",
+                f"scipy=={scipy.__version__}",  # monitoring features
             ],
         )
         model_version = mlflow.register_model(model_info.model_uri, name)
