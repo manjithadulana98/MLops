@@ -373,6 +373,34 @@ REST API:
 | `POST /invocations` with `{"inputs": [window, ...]}`, each window 3600 rows of `[lead1_mV, lead2_mV]` | `{"predictions": [p, ...]}`, P(VT/PVC) per window |
 | Wrong shape, or a window failing clinical validation (NaN/Inf, outside ±5 mV) | `400 INVALID_PARAMETER_VALUE` with the reason, e.g. `[VOLTAGE_RANGE] ... (lead: window 0, lead 1)` |
 
+### Docker
+
+Build an image from a registered version. The model, its pinned requirements and
+MLflow's model server are baked in, so the container needs neither the repo nor the
+registry at runtime. Docker Desktop must be running (`docker desktop start`).
+
+```powershell
+$env:MLFLOW_TRACKING_URI = "sqlite:///mlflow_tracking.db"
+
+# Tag the image with the version it contains (check the alias in the MLflow UI)
+mlflow models build-docker -m "models:/vt-detector@champion" -n vt-detector:v3
+
+docker run --rm -p 5002:8080 vt-detector:v3
+python scripts/predict_request.py --url http://127.0.0.1:5002/invocations --record 119 --start 60
+```
+
+- Same REST API as `mlflow models serve` (`/ping`, `/invocations`), on port 8080
+  inside the container.
+- The alias is resolved at **build** time: the image holds that exact version.
+  Rebuild after a new `champion` is promoted.
+- To see what goes into the image without building it:
+  `mlflow models generate-dockerfile -m "models:/vt-detector@champion" -d build/docker`.
+  It writes a Dockerfile (Python slim base matching the training Python, nginx,
+  MLflow, the model under `/opt/ml/model`, then its pinned requirements) and the
+  model directory.
+- The image is about 6 GB (TensorFlow plus MLflow's full dependency set) and the
+  first build takes around 10 minutes.
+
 > The tracking DB is a local SQLite file, so the registry lives on the machine that
 > trained the model. In CI it is discarded after each run; a shared tracking server
 > is needed for a registry that persists across machines.
