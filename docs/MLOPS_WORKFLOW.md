@@ -310,9 +310,10 @@ client = MlflowClient()
 mv = client.get_model_version_by_alias("vt-detector", "challenger")
 print(mv.version, mv.tags)
 
-# Load a model by alias (input is the 224x224x3 image the model expects;
-# ECG-to-image conversion lives in VGG16ECGModel, not in the logged model)
-model = mlflow.tensorflow.load_model("models:/vt-detector@challenger")
+# Load a model by alias. Each version is a self-contained pyfunc (network +
+# preprocessing + input validation): raw ECG windows in, probabilities out.
+model = mlflow.pyfunc.load_model("models:/vt-detector@challenger")
+probabilities = model.predict(signals)  # signals: float32 (N, 3600, 2), mV
 ```
 
 In the MLflow UI, open **Models → vt-detector** to see versions, tags and aliases.
@@ -341,6 +342,36 @@ model (1% of data, 1 epoch) that isn't expected to meet the thresholds, so the g
 is *report-only* there (`--no-promote`, `continue-on-error`). Manual runs
 (**Actions → Train & Evaluate → Run workflow**, where you choose the data fraction
 and epochs) run the real `gate` stage and fail the job on a miss.
+
+### Serving
+
+Each registered version is an MLflow **pyfunc** (`src/serving/pyfunc_model.py`) that
+bundles the network, the ECG→image preprocessing, the clinical input validation and
+its own copy of `src/`, plus a signature (`float32 (-1, 3600, 2)`) and an input
+example. It runs without the repo, so it can be served directly:
+
+```powershell
+# From the repo root with the venv activated (.venv\Scripts\activate), so that the
+# `uvicorn` that MLflow launches is the venv's.
+$env:MLFLOW_TRACKING_URI = "sqlite:///mlflow_tracking.db"
+mlflow models serve -m "models:/vt-detector@champion" -p 5001 --env-manager local
+
+# In a second terminal: score a real 10-second MIT-BIH window
+python scripts/predict_request.py --record 119 --start 60
+```
+
+- The alias is resolved when the server starts: restart it after a new `champion`
+  is promoted. `models:/vt-detector@challenger` or `models:/vt-detector/3` also work.
+- `--env-manager local` uses the current environment. Without it, MLflow builds an
+  isolated environment from the model's pinned requirements (slower; needs `virtualenv`).
+
+REST API:
+
+| Request | Response |
+|---|---|
+| `GET /ping` | `200` once the model is loaded |
+| `POST /invocations` with `{"inputs": [window, ...]}`, each window 3600 rows of `[lead1_mV, lead2_mV]` | `{"predictions": [p, ...]}`, P(VT/PVC) per window |
+| Wrong shape, or a window failing clinical validation (NaN/Inf, outside ±5 mV) | `400 INVALID_PARAMETER_VALUE` with the reason, e.g. `[VOLTAGE_RANGE] ... (lead: window 0, lead 1)` |
 
 > The tracking DB is a local SQLite file, so the registry lives on the machine that
 > trained the model. In CI it is discarded after each run; a shared tracking server

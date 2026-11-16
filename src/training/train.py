@@ -20,13 +20,18 @@ from pathlib import Path
 
 import numpy as np
 import mlflow
-import mlflow.tensorflow
+import tensorflow as tf
 import yaml
+from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader
 from src.registry import CHALLENGER_ALIAS
+from src.serving.pyfunc_model import KERAS_ARTIFACT, VTDetectorModel
 from src.training.model import VGG16ECGModel
+
+# The src/ package, bundled with each logged model so it loads without the repo.
+SRC_DIR = Path(__file__).resolve().parents[1]
 
 # ── Logging configuration ────────────────────────────────────────────────────
 
@@ -251,15 +256,30 @@ class TrainingPipeline:
 
         return tags
 
-    def register_model(self, model: VGG16ECGModel, lineage: dict) -> str:
-        """Log the trained model to MLflow and register it as a new challenger version.
+    def register_model(
+        self,
+        model: VGG16ECGModel,
+        lineage: dict,
+        keras_path: str,
+        input_example: np.ndarray,
+    ) -> str:
+        """Log the model as an MLflow pyfunc and register it as a new challenger version.
+
+        The pyfunc bundles the saved network with its preprocessing and input
+        validation (see ``src/serving/pyfunc_model.py``), so the registered
+        version takes raw ECG windows and can be served with ``mlflow models serve``.
 
         Parameters
         ----------
         model : VGG16ECGModel
-            Trained model.
+            Trained model (used to infer the output signature).
         lineage : dict
             Tags linking the version to its code and data (see ``lineage_tags``).
+        keras_path : str
+            Path of the saved .keras file to package.
+        input_example : np.ndarray
+            One or more raw ECG windows, shape (N, 3600, 2); stored with the
+            model and used to infer its input signature.
 
         Returns
         -------
@@ -268,7 +288,21 @@ class TrainingPipeline:
         """
         name = self.config.get("mlflow", {}).get("registered_model_name", "vt-detector")
 
-        model_info = mlflow.tensorflow.log_model(model.model, name="model")
+        input_example = np.asarray(input_example, dtype=np.float32)
+        signature = infer_signature(input_example, model.predict(input_example))
+        model_info = mlflow.pyfunc.log_model(
+            name="model",
+            python_model=VTDetectorModel(),
+            artifacts={KERAS_ARTIFACT: str(keras_path)},
+            code_paths=[str(SRC_DIR)],
+            signature=signature,
+            input_example=input_example,
+            pip_requirements=[
+                f"mlflow=={mlflow.__version__}",
+                f"tensorflow=={tf.__version__}",
+                f"numpy=={np.__version__}",
+            ],
+        )
         model_version = mlflow.register_model(model_info.model_uri, name)
 
         client = MlflowClient()
@@ -368,7 +402,9 @@ class TrainingPipeline:
                 # Register in the MLflow Model Registry (can be disabled on
                 # low-disk machines; the .keras checkpoint above is still saved).
                 if mlflow_config.get("register_model", True):
-                    self.register_model(model, lineage)
+                    self.register_model(
+                        model, lineage, keras_path=checkpoint_path, input_example=X_val[:1]
+                    )
                 else:
                     logger.info("Model registry disabled (mlflow.register_model=false)")
 

@@ -21,6 +21,7 @@ import mlflow
 import numpy as np
 import pytest
 from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
 
 from src.ingestion import load_mit_dataset
 from src.ingestion.load_mit_dataset import MITDatasetLoader
@@ -163,17 +164,30 @@ def test_register_model_sets_challenger_alias_and_lineage(built_model, tmp_path)
         assert lineage["git_dirty"] in {"true", "false"}
         assert lineage["data_md5"].endswith(".dir")  # read from data/MIT_dataset.dvc
 
-        with mlflow.start_run(experiment_id=exp_id):
-            v1 = pipeline.register_model(built_model, lineage)
-        with mlflow.start_run(experiment_id=exp_id):
-            v2 = pipeline.register_model(built_model, lineage)
+        keras_path = tmp_path / "model.keras"
+        built_model.save(str(keras_path))
+        X, _ = synthetic_ecg(3)
+        for _ in range(2):
+            with mlflow.start_run(experiment_id=exp_id):
+                pipeline.register_model(built_model, lineage, str(keras_path), X[:1])
 
         client = MlflowClient()
         challenger = client.get_model_version_by_alias(name, CHALLENGER_ALIAS)
         # The alias follows the newest version; older versions stay in the registry.
-        assert (str(v1), str(v2)) == ("1", "2")
-        assert str(challenger.version) == str(v2)
-        assert client.get_model_version(name, v1).tags == lineage
+        assert str(challenger.version) == "2"
+        assert client.get_model_version(name, "1").tags == lineage
         assert challenger.tags == lineage
+
+        # The registered version is a self-contained pyfunc: raw ECG in, probability out.
+        served = mlflow.pyfunc.load_model(f"models:/{name}@{CHALLENGER_ALIAS}")
+        assert served.metadata.get_input_schema().inputs[0].shape == (-1, 3600, 2)
+        np.testing.assert_allclose(
+            served.predict(X), built_model.predict(X), rtol=1e-4, atol=1e-6
+        )
+        # Bad input surfaces as MlflowException, which the scoring server maps to HTTP 400.
+        with pytest.raises(MlflowException, match="VOLTAGE_RANGE"):
+            served.predict(X * 100)  # ~130 mV: outside the +/-5 mV physiological range
+        with pytest.raises(MlflowException, match="shape"):
+            served.predict(np.zeros((1, 100, 2), dtype=np.float32))
     finally:
         mlflow.set_tracking_uri(previous_uri)
