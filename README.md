@@ -39,7 +39,9 @@ All model checkpoints must achieve the following minimum thresholds on the MIT-B
 MLops/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                  # Automated CI: lint + test
+│       ├── ci.yml                  # Automated CI: lint + test
+│       ├── train.yml               # DVC pipeline: train, evaluate, gate, model bundle
+│       └── drift.yml               # Drift check: after training, weekly, on demand
 ├── configs/                        # YAML experiment configurations
 ├── data/
 │   ├── raw/                        # Immutable source data (DVC-tracked)

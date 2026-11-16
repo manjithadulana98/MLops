@@ -484,8 +484,46 @@ python -m src.monitoring.drift --log-dir monitoring/predictions --since 30m
   in the MLflow UI.
 - `--since` takes an ISO time or `30m` / `2h` / `1d`. Fewer than 30 scored windows
   (`--min-windows`) is reported as "not enough traffic" instead of tested.
-- Exits 0; add `--fail-on-drift` to exit 1 on drift, e.g. in a scheduled job that
-  should alert.
+- Requests the model refused (clinical input validation) never reach the drift test,
+  so their share is checked separately: more than 5% rejected windows
+  (`--max-rejection-rate`) raises a rejection-rate alert. A gain problem big enough
+  to push signals out of the valid voltage range shows up here, not as drift.
+- Exits 0; add `--fail-on-drift` to exit 1 on drift or a rejection-rate alert, e.g.
+  in a scheduled job that should alert.
+
+**5. In CI** (`.github/workflows/drift.yml`). The same check runs on GitHub Actions:
+
+```
+Train & Evaluate ──► artifact "model-bundle" ──► Drift Check workflow
+  (registered model + reference.csv            serve it, send MIT-BIH windows,
+   + bundle.json: version, run, commit)        drift check --fail-on-drift
+```
+
+- **When:** after every successful Train & Evaluate run on `main` (checks the model
+  that run just trained), every Monday at 06:00 UTC, and on demand from the
+  Actions tab (**Drift Check → Run workflow**). Scheduled and manual runs check the
+  model from the latest successful Train & Evaluate run.
+- **Alarm:** drift or a rejection-rate alert fails the run, and GitHub sends a
+  notification email for the failed run. The run summary shows the model, the
+  traffic and the per-column table; the Evidently HTML report, the prediction log
+  and the server log are uploaded as the `drift-report` artifact.
+- **Seeing it fire:** run it manually with *Simulated problem* = `noise`, `gain` or
+  `baseline` (and optionally a *strength*). `gain` with strength `2.5` pushes most
+  windows out of the valid voltage range, so it trips the rejection-rate alert
+  instead.
+- **Where the traffic comes from:** there is no long-running deployment, so the
+  job starts the server itself and replays MIT-BIH windows through it. In a real
+  setup the servers would write their prediction logs to shared storage (a bucket),
+  and the scheduled job would download recent logs instead of generating traffic.
+- **False alarms:** each run (and each re-run) sends a different random sample.
+  Against the small 1% reference, roughly 1 clean run in 20 crosses the 3-column
+  threshold by chance. Re-running draws a fresh sample, which is a quick way to
+  tell a fluke from real drift. Production setups usually alert only when drift
+  shows up in consecutive checks.
+- **Limits:** the bundle artifact is kept for 90 days, so a scheduled run more than
+  90 days after the last training run fails with a message asking for a new training
+  run. GitHub also pauses scheduled workflows in public repositories after 60 days
+  without repository activity.
 
 ---
 
@@ -699,8 +737,9 @@ mlflow ui --host 0.0.0.0 --port 5000
    - Deploy via Kubernetes / Cloud Run
    - Set up API for real-time inference
 
-3. **Monitoring in production** (input/prediction drift is covered above):
-   - Run the drift check on a schedule and alert on `--fail-on-drift`
+3. **Monitoring in production** (input/prediction drift and the scheduled CI check
+   are covered above):
+   - Ship prediction logs from real servers to shared storage for the scheduled check
    - Collect labels for a sample of live windows to track real accuracy
    - Retrain on new data when drift persists
 

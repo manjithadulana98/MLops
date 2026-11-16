@@ -1,0 +1,167 @@
+name: Drift Check - VT Detection Pipeline
+
+# Serves a trained model with prediction logging on, sends it MIT-BIH windows
+# as stand-in production traffic, and runs the drift check
+# (src/monitoring/drift.py) against that model's reference profile.
+# The run fails on drift or a rejection-rate alert, so an alarm shows up as a
+# failed run and a GitHub notification.
+#
+# When it runs, and which model it checks:
+# - after each successful Train & Evaluate run on main: that run's model
+# - weekly (Monday 06:00 UTC): the latest successful Train & Evaluate run's model
+# - manually: same as weekly, with an optional simulated problem in the
+#   traffic to see the alarm fire
+#
+# There's no long-running deployment to monitor, so the traffic is generated
+# here. In a real setup the servers would write their prediction logs to
+# shared storage, and this job would download recent logs instead.
+
+on:
+  workflow_run:
+    workflows: ["Train & Evaluate - VT Detection Pipeline"]
+    types: [completed]
+    branches: [main]
+
+  schedule:
+    - cron: "0 6 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      drift:
+        description: "Simulated problem in the traffic"
+        type: choice
+        options: [none, gain, noise, baseline]
+        default: none
+      strength:
+        description: "Size of the problem (blank = default: gain x1.5, noise 0.05 mV, baseline 0.5 mV)"
+        required: false
+        default: ""
+      windows:
+        description: "Number of 10 s windows to send"
+        required: false
+        default: "150"
+
+permissions:
+  contents: read
+  actions: read # find Train & Evaluate runs and download their artifacts
+
+jobs:
+  drift-check:
+    name: Serve, send traffic, check drift
+    # workflow_run fires on every completion; skip failed or cancelled training runs.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download the model bundle from Train & Evaluate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          run_id="$TRIGGER_RUN_ID"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow train.yml --branch main \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          fi
+          if [ -z "$run_id" ]; then
+            echo "::error::No successful Train & Evaluate run on main to take a model from."
+            exit 1
+          fi
+          if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name model-bundle --dir model-bundle; then
+            echo "::error::Train & Evaluate run $run_id has no model-bundle artifact (the run predates the drift workflow, or the artifact expired). Run Train & Evaluate again."
+            exit 1
+          fi
+          cat model-bundle/bundle.json
+          model=$(jq -r '"\(.registered_model) v\(.version)"' model-bundle/bundle.json)
+          commit=$(jq -r '(.git_commit // "unknown")[0:7]' model-bundle/bundle.json)
+          echo "**Model:** \`$model\` from [Train & Evaluate run $run_id]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id), commit \`$commit\`  " >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache MIT-BIH dataset
+        id: dataset-cache
+        uses: actions/cache@v6
+        with:
+          path: data/MIT_dataset
+          key: mitdb-${{ hashFiles('scripts/ci_download_dataset.py') }}
+
+      - name: Download MIT-BIH dataset from PhysioNet (with retries)
+        if: steps.dataset-cache.outputs.cache-hit != 'true'
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Dataset download attempt ${attempt}/5"
+            python3 scripts/ci_download_dataset.py && break
+            if [ "$attempt" -eq 5 ]; then
+              echo "Dataset download failed after 5 attempts."
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+
+      - name: Start the model server (prediction logging on)
+        run: |
+          VT_PREDICTION_LOG_DIR=monitoring/predictions \
+            nohup mlflow models serve -m model-bundle/model -p 5001 --env-manager local \
+            > server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:5001/ping > /dev/null; then
+              echo "Server up after ~$((attempt * 5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Model server didn't come up within 5 minutes."
+          cat server.log
+          exit 1
+
+      - name: Send traffic (MIT-BIH windows, optionally distorted)
+        env:
+          DRIFT: ${{ inputs.drift || 'none' }}
+          STRENGTH: ${{ inputs.strength }}
+          WINDOWS: ${{ inputs.windows || '150' }}
+        run: |
+          # A different sample on every run and re-run, like fresh traffic.
+          seed=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
+          args=(--windows "$WINDOWS" --drift "$DRIFT" --seed "$seed")
+          if [ -n "$STRENGTH" ]; then
+            args+=(--strength "$STRENGTH")
+          fi
+          python scripts/simulate_traffic.py "${args[@]}"
+          printf '**Traffic:** %s MIT-BIH windows, simulated problem: %s%s, seed %s\n\n' \
+            "$WINDOWS" "$DRIFT" "${STRENGTH:+ (strength $STRENGTH)}" "$seed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check for drift (fails on drift or a rejection-rate alert)
+        run: |
+          python -m src.monitoring.drift \
+            --reference model-bundle/reference.csv \
+            --log-dir monitoring/predictions \
+            --output-dir reports/drift \
+            --no-mlflow \
+            --fail-on-drift
+
+      - name: Show server log
+        if: failure()
+        run: tail -n 100 server.log || true
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: drift-report
+          path: |
+            reports/drift/
+            monitoring/predictions/
+            server.log
+          if-no-files-found: ignore
+          retention-days: 30

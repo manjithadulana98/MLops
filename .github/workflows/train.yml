@@ -7,6 +7,8 @@ name: Train & Evaluate - VT Detection Pipeline
 #   for this job).
 # - Push runs are report-only: the gate table is shown on the run summary,
 #   but a miss doesn't fail the job and nothing is promoted.
+# A successful run uploads "model-bundle" (the registered model + its
+# reference profile), which drift.yml serves and checks.
 #
 # Defaults are smoke-test sized: GitHub-hosted runners are CPU-only and cap
 # jobs at 6 hours, and VGG16 on the full dataset takes hours per epoch.
@@ -30,6 +32,8 @@ on:
       - "src/**"
       - "configs/**"
       - "dvc.yaml"
+      - "scripts/ci_*.py"
+      - ".github/workflows/train.yml"
 
 jobs:
   train-and-evaluate:
@@ -114,6 +118,20 @@ jobs:
             --report reports/evaluation_report.json \
             --output reports/gate.json \
             --no-promote
+
+      # Skipped when an earlier step failed (e.g. the enforced gate), so only
+      # models that made it through the pipeline get monitored.
+      - name: Export model bundle (registered model + reference profile)
+        run: python scripts/ci_export_model.py
+
+      - name: Upload model bundle (used by the drift workflow)
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-bundle
+          path: model-bundle/
+          # Kept longer than the reports: the weekly drift check needs it until
+          # the next training run.
+          retention-days: 90
 
       - name: Upload evaluation report
         uses: actions/upload-artifact@v7

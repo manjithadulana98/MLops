@@ -58,3 +58,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# CI drift workflow (model bundle from Train & Evaluate, server output)
+/model-bundle/
+/server.log
