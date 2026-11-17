@@ -401,6 +401,30 @@ python scripts/predict_request.py --url http://127.0.0.1:5002/invocations --reco
 - The image is about 6 GB (TensorFlow plus MLflow's full dependency set) and the
   first build takes around 10 minutes.
 
+**From CI: published to GitHub Container Registry.** When a manual Train & Evaluate
+run (**Actions → Train & Evaluate → Run workflow**) passes the gate and promotes a new
+champion, its `publish-image` job builds that model into an image the same way
+(`mlflow models generate-dockerfile` + `docker build`), starts it and sends it the
+model's stored input example, and only if that works pushes it:
+
+```powershell
+docker pull ghcr.io/manjithadulana98/vt-detector:champion   # latest promoted model
+docker run --rm -p 5002:8080 ghcr.io/manjithadulana98/vt-detector:champion
+```
+
+- Tags: `champion` moves to each newly promoted model, like the registry alias;
+  `run-<n>` stays fixed to the image from Train & Evaluate run *n*. The image labels
+  record the commit and MLflow training run.
+- Push-triggered runs don't publish: their gate is report-only, so nothing is promoted.
+- A 1%, 1-epoch model is close to random and may miss the gate; use a larger
+  *sample_fraction* or more *epochs* if the gate keeps failing.
+- The first push creates the package as **private**. To pull without logging in, make
+  it public under **GitHub profile → Packages → vt-detector → Package settings**;
+  otherwise log in first with a personal access token that has `read:packages`
+  (`docker login ghcr.io`).
+- The workflow pushes with the job's built-in `GITHUB_TOKEN` (`packages: write` on
+  that job only), so no secrets need setting up.
+
 > The tracking DB is a local SQLite file, so the registry lives on the machine that
 > trained the model. In CI it is discarded after each run; a shared tracking server
 > is needed for a registry that persists across machines.
@@ -489,7 +513,9 @@ python -m src.monitoring.drift --log-dir monitoring/predictions --since 30m
   (`--max-rejection-rate`) raises a rejection-rate alert. A gain problem big enough
   to push signals out of the valid voltage range shows up here, not as drift.
 - Exits 0; add `--fail-on-drift` to exit 1 on drift or a rejection-rate alert, e.g.
-  in a scheduled job that should alert.
+  in a scheduled job that should alert. Add `--fail-on-insufficient-data` where
+  traffic is expected: then "not enough traffic" also exits 1, since an empty log
+  means serving or logging is broken.
 
 **5. In CI** (`.github/workflows/drift.yml`). The same check runs on GitHub Actions:
 
@@ -732,10 +758,9 @@ mlflow ui --host 0.0.0.0 --port 5000
    - Augment ECG signals (time-shift, noise injection)
    - Use 12-lead ECG data instead of 2-lead
 
-2. **Deploy to cloud**:
-   - Push models to MLflow Model Registry
-   - Deploy via Kubernetes / Cloud Run
-   - Set up API for real-time inference
+2. **Deploy to cloud** (champion images are already published to GHCR, see Docker):
+   - Run the `champion` image on Kubernetes / Cloud Run
+   - A shared MLflow tracking server, so the registry outlives CI jobs
 
 3. **Monitoring in production** (input/prediction drift and the scheduled CI check
    are covered above):

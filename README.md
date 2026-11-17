@@ -40,7 +40,7 @@ MLops/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml                  # Automated CI: lint + test
-│       ├── train.yml               # DVC pipeline: train, evaluate, gate, model bundle
+│       ├── train.yml               # DVC pipeline: train, evaluate, gate, model bundle, image to GHCR
 │       └── drift.yml               # Drift check: after training, weekly, on demand
 ├── configs/                        # YAML experiment configurations
 ├── data/

@@ -9,6 +9,9 @@ name: Train & Evaluate - VT Detection Pipeline
 #   but a miss doesn't fail the job and nothing is promoted.
 # A successful run uploads "model-bundle" (the registered model + its
 # reference profile), which drift.yml serves and checks.
+# When a manual run promotes a new champion, the publish-image job builds it
+# as a Docker image, smoke-tests it and pushes it to GitHub Container Registry
+# (ghcr.io/<owner>/vt-detector:champion and :run-<run number>).
 #
 # Defaults are smoke-test sized: GitHub-hosted runners are CPU-only and cap
 # jobs at 6 hours, and VGG16 on the full dataset takes hours per epoch.
@@ -173,3 +176,84 @@ jobs:
         run: |
           echo "=== EVALUATION SUMMARY ==="
           python3 scripts/ci_print_metrics.py
+
+  # Manual runs only: there the gate is enforced, so if the training job
+  # succeeded, its model is the new champion.
+  publish-image:
+    name: Publish champion image to GHCR
+    needs: train-and-evaluate
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download model bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: model-bundle
+          path: model-bundle
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # Only the MLflow CLI is needed here; the model's own requirements are
+      # installed inside the image.
+      - name: Install MLflow (the version the model was logged with)
+        run: pip install "$(grep -E '^mlflow==' model-bundle/model/requirements.txt)"
+
+      # The image is ~6 GB; preinstalled SDKs this job doesn't use free ~20 GB.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build image
+        run: |
+          mlflow models generate-dockerfile -m model-bundle/model -d build/docker
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/vt-detector"
+          tag="run-${GITHUB_RUN_NUMBER}"
+          docker build build/docker -t "$image:$tag" -t "$image:champion" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.description=VT/PVC detector, MLflow training run $(jq -r .training_run_id model-bundle/bundle.json)"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          docker image ls "$image"
+
+      # Push only an image that starts and answers a real request.
+      - name: Smoke-test image
+        run: |
+          docker run -d --name vt-detector -p 8080:8080 "$IMAGE:$TAG"
+          for attempt in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8080/ping > /dev/null && break
+            sleep 5
+          done
+          curl -sf -H "Content-Type: application/json" \
+            -d @model-bundle/model/serving_input_example.json \
+            http://127.0.0.1:8080/invocations > response.json
+          python -c "import json; p = json.load(open('response.json'))['predictions']; assert p and all(0 <= x <= 1 for x in p), p; print('predictions:', p)"
+
+      - name: Show container log
+        if: failure()
+        run: docker logs vt-detector 2>&1 | tail -n 100 || true
+
+      - name: Push to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push --all-tags "$IMAGE"
+          {
+            echo "### Published image"
+            echo ""
+            echo "\`$IMAGE:$TAG\` (also tagged \`champion\`)"
+            echo ""
+            echo "\`\`\`"
+            echo "docker run --rm -p 5002:8080 $IMAGE:champion"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
