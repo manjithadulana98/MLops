@@ -141,6 +141,8 @@ jobs:
           printf '**Traffic:** %s MIT-BIH windows, simulated problem: %s%s, seed %s\n\n' \
             "$WINDOWS" "$DRIFT" "${STRENGTH:+ (strength $STRENGTH)}" "$seed" >> "$GITHUB_STEP_SUMMARY"
 
+      # The traffic was just sent, so too little of it in the log means logging
+      # or serving is broken: fail rather than report "not enough traffic".
       - name: Check for drift (fails on drift or a rejection-rate alert)
         run: |
           python -m src.monitoring.drift \
@@ -148,7 +150,8 @@ jobs:
             --log-dir monitoring/predictions \
             --output-dir reports/drift \
             --no-mlflow \
-            --fail-on-drift
+            --fail-on-drift \
+            --fail-on-insufficient-data
 
       - name: Show server log
         if: failure()

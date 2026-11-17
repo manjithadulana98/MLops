@@ -179,6 +179,8 @@ def test_too_little_traffic_skips_the_test(tmp_path):
     assert summary["status"] == "insufficient_data"
     assert not summary["rejection_alert"]
     assert not (tmp_path / "out" / drift.REPORT_HTML).exists()
+    # Where traffic is expected (CI sends it), an empty-ish log is an alarm.
+    assert run_drift(tmp_path, "--no-mlflow", "--fail-on-insufficient-data")[0] == 1
 
 
 def test_high_rejection_rate_raises_an_alert(tmp_path):

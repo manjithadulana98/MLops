@@ -26,7 +26,8 @@ it outputs (prediction drift), not its accuracy. Requests the model refused
 (clinical validation) never reach the drift test, so their share is checked
 separately against ``--max-rejection-rate``.
 
-Exit code: 0, or 1 with --fail-on-drift on drift or a rejection-rate alert.
+Exit code: 0, or 1 with --fail-on-drift on drift or a rejection-rate alert,
+and with --fail-on-insufficient-data when too few windows were scored.
 
 Usage:
     python -m src.monitoring.drift --log-dir monitoring/predictions
@@ -245,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-mlflow", action="store_true", help="Don't record an MLflow run")
     parser.add_argument("--fail-on-drift", action="store_true",
                         help="Exit with code 1 on drift or a rejection-rate alert")
+    parser.add_argument("--fail-on-insufficient-data", action="store_true",
+                        help="Also exit with code 1 when there are fewer than --min-windows "
+                             "scored windows (when traffic is expected, e.g. it was just "
+                             "sent, an empty log means logging or serving is broken)")
     args = parser.parse_args(argv)
 
     since = parse_since(args.since) if args.since else None
@@ -291,8 +296,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         logger.info(f"Recorded in MLflow experiment '{MLFLOW_EXPERIMENT}', run {run_id}")
 
-    alarm = summary["status"] == "drift" or summary["rejection_alert"]
-    return 1 if args.fail_on_drift and alarm else 0
+    alarm = args.fail_on_drift and (summary["status"] == "drift" or summary["rejection_alert"])
+    no_data = args.fail_on_insufficient_data and summary["status"] == "insufficient_data"
+    return 1 if alarm or no_data else 0
 
 
 if __name__ == "__main__":
