@@ -90,6 +90,9 @@ class ModelEvaluator:
             "threshold": float(threshold),
             "sensitivity": float(sensitivity),
             "specificity": float(specificity),
+            # Mean of the per-class recalls: unlike plain accuracy, a model that
+            # never flags the (rare) VT/PVC class only scores 0.5.
+            "balanced_accuracy": float((sensitivity + specificity) / 2),
             "precision": float(precision),
             "f1_score": float(f1),
             "matthews_corrcoef": float(mcc),

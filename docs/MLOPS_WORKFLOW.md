@@ -192,15 +192,14 @@ What it does:
 **Clinical Metrics Definition**:
 - **Sensitivity** = TP / (TP + FN) — ability to detect VT/PVC
 - **Specificity** = TN / (TN + FP) — ability to reject normal beats
+- **Balanced accuracy** = (sensitivity + specificity) / 2 — accuracy that isn't
+  fooled by class imbalance (a model that never flags VT/PVC scores 0.5)
 - **F1-Score** = 2 × (precision × recall) / (precision + recall) — balance
 - **ROC-AUC** = area under ROC curve — threshold-independent metric
 
-**Minimum acceptance thresholds**:
+**Minimum acceptance threshold** (the promotion gate, `gate.thresholds`):
 ```
-Sensitivity  ≥ 49%   (detect VT/PVC)
-Specificity  ≥ 48.5% (minimize false alarms)
-F1-Score     ≥ 0.485
-ROC-AUC      ≥ 0.495
+Balanced accuracy  ≥ 0.55
 ```
 
 ---

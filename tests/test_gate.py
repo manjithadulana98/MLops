@@ -22,6 +22,7 @@ def make_report(sensitivity: float = 0.85, roc_auc: float = 0.95) -> dict:
         "binary_metrics": {
             "sensitivity": sensitivity,
             "specificity": 0.9,
+            "balanced_accuracy": (sensitivity + 0.9) / 2,
             "precision": 0.5,
             "f1_score": 0.6,
         },
@@ -88,6 +89,15 @@ def test_check_thresholds_reports_each_metric():
 
 def test_threshold_is_inclusive():
     assert gate.check_thresholds(make_report(0.8), {"sensitivity": 0.8})[0]["passed"]
+
+
+def test_balanced_accuracy_can_be_gated():
+    # (0.3 + 0.9) / 2 = 0.6
+    [check] = gate.check_thresholds(make_report(sensitivity=0.3), {"balanced_accuracy": 0.55})
+    assert check["passed"]
+    assert check["value"] == pytest.approx(0.6)
+    [check] = gate.check_thresholds(make_report(sensitivity=0.1), {"balanced_accuracy": 0.55})
+    assert not check["passed"]
 
 
 def test_unknown_metric_or_no_thresholds_is_an_error():

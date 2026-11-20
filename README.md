@@ -24,10 +24,9 @@ All model checkpoints must achieve the following minimum thresholds on the MIT-B
 
 | Metric | Minimum Threshold |
 |---|---|
-| Sensitivity (Recall) | ≥ 49 % |
-| Specificity | ≥ 48.5 % |
-| F1-Score | ≥ 0.485 |
-| AUC-ROC | ≥ 0.495 |
+| Balanced accuracy = (sensitivity + specificity) / 2 | ≥ 0.55 |
+
+Balanced accuracy is used rather than plain accuracy because only ~8% of windows are VT/PVC: a model that never flags one would have ~92% accuracy but only 0.50 balanced accuracy. Other metrics (sensitivity, specificity, precision, F1, AUC-ROC, average precision) can be added to `gate.thresholds` as well.
 
 **ANSI/AAMI EC57** defines how arrhythmia detector performance should be tested and reported. The values above are deliberately low placeholders for exercising the pipeline, not clinical acceptance criteria.
 

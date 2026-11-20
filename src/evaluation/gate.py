@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 METRIC_PATHS = {
     "sensitivity": ("binary_metrics", "sensitivity"),
     "specificity": ("binary_metrics", "specificity"),
+    "balanced_accuracy": ("binary_metrics", "balanced_accuracy"),
     "precision": ("binary_metrics", "precision"),
     "f1_score": ("binary_metrics", "f1_score"),
     "roc_auc": ("roc_metrics", "roc_auc"),

@@ -107,6 +107,7 @@ def main():
     optimal_metrics = report.get("optimal_threshold_metrics", {})
     print(f"Sensitivity (Recall): {binary_metrics['sensitivity']:.4f}")
     print(f"Specificity:          {binary_metrics['specificity']:.4f}")
+    print(f"Balanced accuracy:    {binary_metrics['balanced_accuracy']:.4f}")
     print(f"Precision:            {binary_metrics['precision']:.4f}")
     print(f"F1-Score:             {binary_metrics['f1_score']:.4f}")
     print(f"ROC AUC:              {report['roc_metrics']['roc_auc']:.4f}")
