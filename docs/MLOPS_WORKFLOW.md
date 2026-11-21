@@ -282,6 +282,54 @@ best_run = mlflow.search_runs(
 ).iloc[0]
 ```
 
+### Shared Tracking Server
+
+By default everything goes to a local SQLite file (`mlflow_tracking.db`) and the
+`mlruns/` folder: fine for one person on one machine. A team runs MLflow as a
+**server** instead, with the two kinds of data in their proper stores:
+
+```
+scripts / dvc repro / mlflow models serve
+            │  HTTP (MLFLOW_TRACKING_URI)
+            ▼
+     MLflow server :5000 ──► Postgres          runs, params, metrics, registry, aliases
+            │
+            └─(--serve-artifacts)──► S3 bucket  models, plots, drift reports
+```
+
+`deploy/mlflow/docker-compose.yml` runs this locally: Postgres, SeaweedFS as the
+S3-compatible object store (MinIO no longer publishes Docker images), and the MLflow
+server. Clients only ever talk HTTP to MLflow; it proxies artifact uploads and
+downloads to the bucket, so they need no S3 credentials.
+
+```powershell
+docker compose -f deploy/mlflow/docker-compose.yml up -d --build   # first build ~2 min
+# UI: http://127.0.0.1:5000
+
+# Point this terminal at the server: training, the gate, the drift check,
+# `mlflow models serve -m models:/...` and the UI all use it.
+$env:MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+dvc repro
+
+docker compose -f deploy/mlflow/docker-compose.yml stop      # keeps the data
+docker compose -f deploy/mlflow/docker-compose.yml down -v   # deletes it
+```
+
+- **Which store is used:** `MLFLOW_TRACKING_URI` wins over `mlflow.tracking_uri` in
+  the config (`src/registry.py: resolve_tracking_uri`). Unset it to go back to the
+  local SQLite file. CI doesn't set it, so CI keeps its throwaway per-job registry.
+- **Server down:** training fails straight away instead of quietly logging to a
+  local file you'd never look at.
+- **Existing local runs** stay in `mlflow_tracking.db`; the server starts empty.
+- **Memory:** about 0.5 GB for all three containers. The server runs one worker, and
+  MLflow's background job runner (only used for GenAI tracing features) is off.
+- **Data** lives in the Docker volumes `mlflow_postgres-data` and `mlflow_s3-data`.
+  Only MLflow's port is published, and only on localhost; the credentials in the
+  compose file are local-only defaults.
+- **In the cloud** the same layout becomes a managed Postgres, a real bucket
+  (`--artifacts-destination s3://...` or `gs://...`) and the server on a VM or
+  container service. The clients don't change, only `MLFLOW_TRACKING_URI`.
+
 ### Model Registry
 
 Each training run logs the trained model and registers it as a new version of
@@ -759,7 +807,8 @@ mlflow ui --host 0.0.0.0 --port 5000
 
 2. **Deploy to cloud** (champion images are already published to GHCR, see Docker):
    - Run the `champion` image on Kubernetes / Cloud Run
-   - A shared MLflow tracking server, so the registry outlives CI jobs
+   - Host the shared MLflow server (see MLflow Integration) where CI can reach it,
+     so CI-trained models land in the same registry
 
 3. **Monitoring in production** (input/prediction drift and the scheduled CI check
    are covered above):

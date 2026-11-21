@@ -42,6 +42,8 @@ MLops/
 │       ├── train.yml               # DVC pipeline: train, evaluate, gate, model bundle, image to GHCR
 │       └── drift.yml               # Drift check: after training, weekly, on demand
 ├── configs/                        # YAML experiment configurations
+├── deploy/
+│   └── mlflow/                     # Shared MLflow server: docker compose (Postgres + S3)
 ├── data/
 │   ├── raw/                        # Immutable source data (DVC-tracked)
 │   ├── processed/                  # Feature-engineered datasets

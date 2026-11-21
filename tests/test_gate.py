@@ -35,6 +35,8 @@ def make_report(sensitivity: float = 0.85, roc_auc: float = 0.95) -> dict:
 def isolate_environment(monkeypatch):
     """Restore the global MLflow URI and keep test output out of a real CI job summary."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    # Otherwise it would override the test configs' throwaway SQLite registries.
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     previous = mlflow.get_tracking_uri()
     yield
     mlflow.set_tracking_uri(previous)

@@ -57,6 +57,7 @@ from evidently.presets import DataDriftPreset
 
 from src.monitoring.features import FEATURE_COLUMNS
 from src.monitoring.prediction_log import read_prediction_logs
+from src.registry import resolve_tracking_uri, tolerate_unprintable_output
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                              "scored windows (when traffic is expected, e.g. it was just "
                              "sent, an empty log means logging or serving is broken)")
     args = parser.parse_args(argv)
+    tolerate_unprintable_output()
 
     since = parse_since(args.since) if args.since else None
     reference = pd.read_csv(args.reference)
@@ -289,8 +291,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_mlflow:
         with open(args.config, encoding="utf-8") as f:
-            mlflow_config = yaml.safe_load(f).get("mlflow", {})
-        mlflow.set_tracking_uri(mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db"))
+            mlflow.set_tracking_uri(resolve_tracking_uri(yaml.safe_load(f)))
         run_id = log_to_mlflow(
             summary, output_dir, run_name=f"drift-{datetime.now():%Y%m%d-%H%M%S}"
         )

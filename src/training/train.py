@@ -27,7 +27,12 @@ from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 
 from src.ingestion.load_mit_dataset import MITDatasetLoader
-from src.registry import CHALLENGER_ALIAS
+from src.registry import (
+    CHALLENGER_ALIAS,
+    is_remote_tracking_uri,
+    resolve_tracking_uri,
+    tolerate_unprintable_output,
+)
 from src.serving.pyfunc_model import KERAS_ARTIFACT, VTDetectorModel
 from src.training.model import VGG16ECGModel
 
@@ -326,16 +331,21 @@ class TrainingPipeline:
         mlflow_config = self.config.get("mlflow", {})
         experiment_name = mlflow_config.get("experiment_name", "VT-Detection-Default")
         run_name = mlflow_config.get("run_name", "baseline-vgg16")
-        tracking_uri = mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db")
+        tracking_uri = resolve_tracking_uri(self.config)
 
         # Allow file-store backend if configured (opt-out of deprecation error).
         os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
-        # Set up MLflow tracking backend. Fallback to fresh SQLite if primary fails.
+        # Set up MLflow tracking backend. A broken local store falls back to a
+        # fresh SQLite file; an unreachable tracking server is an error, so runs
+        # never silently end up on this machine instead of the shared server.
         mlflow.set_tracking_uri(tracking_uri)
+        logger.info(f"MLflow tracking URI: {tracking_uri}")
         try:
             mlflow.set_experiment(experiment_name)
         except Exception as exc:
+            if is_remote_tracking_uri(tracking_uri):
+                raise
             logger.warning(
                 "MLflow tracking backend init failed (%s). Falling back to fresh SQLite store.",
                 exc,
@@ -459,6 +469,7 @@ def main():
         help="Path to training configuration YAML",
     )
     args = parser.parse_args()
+    tolerate_unprintable_output()
 
     # Load config
     config_path = Path(args.config)

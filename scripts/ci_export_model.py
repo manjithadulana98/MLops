@@ -23,8 +23,13 @@ BUNDLE = Path("model-bundle")
 ALIAS = "challenger"  # set on every version train.py registers
 
 with open(CONFIG, encoding="utf-8") as f:
-    mlflow_config = yaml.safe_load(f).get("mlflow", {})
-mlflow.set_tracking_uri(mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db"))
+    config = yaml.safe_load(f)
+mlflow_config = config.get("mlflow", {})
+# Same rule as src.registry.resolve_tracking_uri (run as a script, so src isn't importable).
+mlflow.set_tracking_uri(
+    os.environ.get("MLFLOW_TRACKING_URI")
+    or mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db")
+)
 name = mlflow_config.get("registered_model_name", "vt-detector")
 
 version = MlflowClient().get_model_version_by_alias(name, ALIAS)

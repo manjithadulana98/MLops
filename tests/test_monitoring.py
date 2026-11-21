@@ -47,6 +47,7 @@ def synthetic_windows(n: int, seed: int, gain: float = 1.0, noise: float = 0.02,
 def isolated_env(monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.delenv(LOG_DIR_ENV, raising=False)
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)  # keep test runs out of a real server
     previous_uri = mlflow.get_tracking_uri()
     yield
     mlflow.set_tracking_uri(previous_uri)

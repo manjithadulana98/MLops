@@ -1,0 +1,78 @@
+# Shared MLflow tracking server: runs and the model registry in Postgres,
+# artifacts (models, plots, drift reports) in an S3-compatible object store.
+#
+#   docker compose -f deploy/mlflow/docker-compose.yml up -d --build
+#   $env:MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"   # point the repo's scripts at it
+#
+# Clients only talk to MLflow over HTTP: the server proxies artifact uploads and
+# downloads to the object store (--serve-artifacts), so they need no S3
+# credentials. Only MLflow's port is published, and only on localhost.
+#
+# SeaweedFS stands in for S3 (MinIO no longer publishes Docker images). In the
+# cloud, swap it for a real bucket (s3://..., gs://...) and Postgres for a
+# managed database; the clients don't change.
+
+name: mlflow
+
+services:
+  postgres:
+    image: postgres:17.12-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow # local-only; not reachable from outside the compose network
+      POSTGRES_DB: mlflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  s3:
+    image: chrislusf/seaweedfs:4.53
+    # All-in-one: master + volume + filer + S3 gateway on port 8333.
+    command: server -dir=/data -s3 -s3.port=8333 -master.volumeSizeLimitMB=1024
+    volumes:
+      - s3-data:/data
+    restart: unless-stopped
+
+  mlflow:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_started
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://s3:8333
+      # SeaweedFS runs without S3 auth here; boto3 still needs some keys to sign with.
+      AWS_ACCESS_KEY_ID: mlflow
+      AWS_SECRET_ACCESS_KEY: mlflow
+      ARTIFACT_BUCKET: mlflow-artifacts
+      # The background job runner (~8 extra processes, ~1.5 GB) only serves GenAI
+      # features (online trace scoring, trace archival) this project doesn't use.
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+    # Create the bucket, then replace the shell with the server, passing it
+    # the `command` list below as its arguments.
+    entrypoint: ["sh", "-c", "python create_bucket.py && exec mlflow server \"$@\"", "--"]
+    command:
+      - --host=0.0.0.0
+      - --port=5000
+      - --workers=1
+      - --backend-store-uri=postgresql+psycopg2://mlflow:mlflow@postgres:5432/mlflow
+      - --artifacts-destination=s3://mlflow-artifacts
+      - --serve-artifacts
+    ports:
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  s3-data:

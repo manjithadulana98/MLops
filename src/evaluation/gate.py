@@ -31,7 +31,12 @@ import yaml
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
-from src.registry import CHALLENGER_ALIAS, CHAMPION_ALIAS
+from src.registry import (
+    CHALLENGER_ALIAS,
+    CHAMPION_ALIAS,
+    resolve_tracking_uri,
+    tolerate_unprintable_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Check thresholds and record the result, but don't move the champion alias",
     )
     args = parser.parse_args(argv)
+    tolerate_unprintable_output()
 
     with open(args.config, encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -165,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     passed = all(c["passed"] for c in checks)
 
     mlflow_config = config.get("mlflow", {})
-    mlflow.set_tracking_uri(mlflow_config.get("tracking_uri", "sqlite:///mlflow_tracking.db"))
+    mlflow.set_tracking_uri(resolve_tracking_uri(config))
     model = record_and_promote(
         mlflow_config.get("registered_model_name", "vt-detector"),
         checks,
