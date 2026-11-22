@@ -593,6 +593,19 @@ Train & Evaluate ──► artifact "model-bundle" ──► Drift Check workflo
   threshold by chance. Re-running draws a fresh sample, which is a quick way to
   tell a fluke from real drift. Production setups usually alert only when drift
   shows up in consecutive checks.
+- **Retraining on repeated drift:** when a check finds drift and the previous check
+  did too, on the same model and the same kind of traffic, the `retrain` job starts
+  a Train & Evaluate run (`src/monitoring/retrain.py`). Its enforced gate then
+  decides whether the new model replaces the champion, which also publishes a new
+  image and triggers a drift check of the new model. Requiring two in a row
+  filters out one-off false alarms, and limits how often it can fire: a retrained
+  model is a new model, so it has to drift twice before the next retrain. A
+  rejection-rate alert or broken logging never retrains (a new model can't fix
+  bad input or a broken server). The run summary says what was decided and why.
+  *To see it:* run Drift Check manually twice with *Simulated problem* = `noise` and
+  *allow_retrain* ticked; the second run starts training. (Manual runs never
+  retrain without that box.) Here retraining reuses the same MIT-BIH data, so it
+  shows the mechanics; a real system would retrain on recent, labelled data.
 - **Limits:** the bundle artifact is kept for 90 days, so a scheduled run more than
   90 days after the last training run fails with a message asking for a new training
   run. GitHub also pauses scheduled workflows in public repositories after 60 days
@@ -814,7 +827,8 @@ mlflow ui --host 0.0.0.0 --port 5000
    are covered above):
    - Ship prediction logs from real servers to shared storage for the scheduled check
    - Collect labels for a sample of live windows to track real accuracy
-   - Retrain on new data when drift persists
+   - Feed those labelled windows into retraining (drift already triggers it, but on
+     the same MIT-BIH data)
 
 ---
 

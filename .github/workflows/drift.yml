@@ -15,6 +15,12 @@ name: Drift Check - VT Detection Pipeline
 # There's no long-running deployment to monitor, so the traffic is generated
 # here. In a real setup the servers would write their prediction logs to
 # shared storage, and this job would download recent logs instead.
+#
+# Retraining: when a check finds drift and the previous check also did (same
+# model, same kind of traffic), the retrain job starts a Train & Evaluate run;
+# its enforced gate decides whether the new model replaces the champion. See
+# src/monitoring/retrain.py. Manual runs with simulated drift only do this
+# when "allow_retrain" is ticked.
 
 on:
   workflow_run:
@@ -40,6 +46,10 @@ on:
         description: "Number of 10 s windows to send"
         required: false
         default: "150"
+      allow_retrain:
+        description: "Start retraining if this drift repeats the previous run's (demo of the loop)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,6 +62,8 @@ jobs:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      status: ${{ steps.context.outputs.status }}
 
     steps:
       - name: Checkout repository
@@ -153,6 +165,23 @@ jobs:
             --fail-on-drift \
             --fail-on-insufficient-data
 
+      # Saved with the report, so the next run's retrain decision can tell
+      # whether drift repeated on the same model and traffic.
+      - name: Record what was checked
+        id: context
+        if: always()
+        env:
+          DRIFT: ${{ inputs.drift || 'none' }}
+          STRENGTH: ${{ inputs.strength }}
+        run: |
+          if [ ! -f reports/drift/drift.json ] || [ ! -f model-bundle/bundle.json ]; then
+            exit 0
+          fi
+          jq -n --slurpfile model model-bundle/bundle.json \
+            '{model: $model[0], traffic: {drift: env.DRIFT, strength: env.STRENGTH}}' \
+            > reports/drift/context.json
+          echo "status=$(jq -r .status reports/drift/drift.json)" >> "$GITHUB_OUTPUT"
+
       - name: Show server log
         if: failure()
         run: tail -n 100 server.log || true
@@ -168,3 +197,83 @@ jobs:
             server.log
           if-no-files-found: ignore
           retention-days: 30
+
+  retrain:
+    name: Retrain if the drift repeats
+    needs: drift-check
+    # Drift only: a rejection-rate alert (bad input) or broken logging can't be
+    # fixed by a new model. Manual runs need allow_retrain.
+    if: >-
+      always() && needs.drift-check.outputs.status == 'drift' &&
+      (github.event_name != 'workflow_dispatch' || inputs.allow_retrain)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write # start Train & Evaluate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Download this run's drift report
+        uses: actions/download-artifact@v8
+        with:
+          name: drift-report
+          path: current
+
+      - name: Download the previous run's drift report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Most recent finished check before this one (runs that were skipped
+          # or cancelled didn't check anything).
+          previous=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow drift.yml \
+            --status completed --limit 20 --json databaseId,conclusion \
+            --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID and (.conclusion == \"success\" or .conclusion == \"failure\"))][0].databaseId // empty")
+          if [ -n "$previous" ] && gh run download "$previous" --repo "$GITHUB_REPOSITORY" \
+              --name drift-report --dir previous; then
+            echo "Comparing with drift run $previous"
+            echo "PREVIOUS_RUN=$previous" >> "$GITHUB_ENV"
+          else
+            echo "No earlier drift report to compare with"
+          fi
+
+      - name: Decide
+        id: decide
+        run: python -m src.monitoring.retrain --current current/reports/drift --previous previous/reports/drift
+
+      - name: Start Train & Evaluate
+        if: steps.decide.outputs.retrain == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Default inputs (1% sample, 1 epoch). In this repo retraining uses the
+        # same MIT-BIH data, so it shows the mechanics; a real system would
+        # retrain on recent (labelled) data.
+        run: gh workflow run train.yml --repo "$GITHUB_REPOSITORY" --ref main
+
+      - name: Summary
+        if: always()
+        env:
+          RETRAIN: ${{ steps.decide.outputs.retrain }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          {
+            echo "### Retraining"
+            echo ""
+            if [ "$RETRAIN" = "true" ]; then
+              echo "**Started a Train & Evaluate run:** $REASON."
+              echo "Its gate decides whether the new model replaces the champion."
+            else
+              echo "Not retraining: ${REASON:-decision step didn't run}."
+            fi
+            if [ -n "$PREVIOUS_RUN" ]; then
+              echo ""
+              echo "Compared with [drift run $PREVIOUS_RUN]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$PREVIOUS_RUN)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

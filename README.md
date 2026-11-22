@@ -40,7 +40,7 @@ MLops/
 │   └── workflows/
 │       ├── ci.yml                  # Automated CI: lint + test
 │       ├── train.yml               # DVC pipeline: train, evaluate, gate, model bundle, image to GHCR
-│       └── drift.yml               # Drift check: after training, weekly, on demand
+│       └── drift.yml               # Drift check (after training, weekly, on demand) + retraining
 ├── configs/                        # YAML experiment configurations
 ├── deploy/
 │   └── mlflow/                     # Shared MLflow server: docker compose (Postgres + S3)

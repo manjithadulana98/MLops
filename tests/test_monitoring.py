@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.monitoring import drift
+from src.monitoring import drift, retrain
 from src.monitoring.features import FEATURE_COLUMNS, compute_features, estimate_heart_rate
 from src.monitoring.prediction_log import (
     LOG_DIR_ENV,
@@ -227,3 +227,41 @@ def test_parse_since():
     assert drift.parse_since("2026-01-02T03:04:05") == datetime(
         2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc
     )
+
+
+# ── Retraining decision ──────────────────────────────────────────────────────
+
+
+def check_result(status="drift", model="run-a", traffic="none") -> dict:
+    return {"status": status, "model": {"training_run_id": model}, "traffic": {"drift": traffic}}
+
+
+def test_retrain_only_when_drift_repeats_on_the_same_model_and_traffic():
+    drift = check_result()
+    assert retrain.should_retrain(drift, check_result())[0]
+    assert not retrain.should_retrain(drift, None)[0]  # first drift seen
+    assert not retrain.should_retrain(drift, check_result(status="no_drift"))[0]
+    assert not retrain.should_retrain(drift, check_result(model="run-b"))[0]  # new model
+    assert not retrain.should_retrain(drift, check_result(traffic="noise"))[0]
+
+
+def test_retrain_never_on_rejections_or_missing_traffic():
+    for status in ("no_drift", "insufficient_data"):
+        assert not retrain.should_retrain(check_result(status=status), check_result())[0]
+
+
+def test_retrain_cli_reads_report_dirs_and_sets_outputs(tmp_path, monkeypatch):
+    for name, result in (("now", check_result()), ("before", check_result())):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "drift.json").write_text(json.dumps({"status": result["status"]}))
+        context = {"model": result["model"], "traffic": result["traffic"]}
+        (tmp_path / name / "context.json").write_text(json.dumps(context))
+    outputs = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+
+    assert retrain.main(
+        ["--current", str(tmp_path / "now"), "--previous", str(tmp_path / "before")]
+    )
+    assert "retrain=true" in outputs.read_text()
+    # A previous run without the files (e.g. older than this feature) doesn't count.
+    assert not retrain.main(["--current", str(tmp_path / "now"), "--previous", str(tmp_path / "x")])
