@@ -270,7 +270,7 @@ jobs:
               echo "**Started a Train & Evaluate run:** $REASON."
               echo "Its gate decides whether the new model replaces the champion."
             else
-              echo "Not retraining: ${REASON:-decision step didn't run}."
+              echo "Not retraining: ${REASON:-decision step did not run}."
             fi
             if [ -n "$PREVIOUS_RUN" ]; then
               echo ""
