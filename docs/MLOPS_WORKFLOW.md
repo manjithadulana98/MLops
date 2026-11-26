@@ -597,7 +597,10 @@ Train & Evaluate ──► artifact "model-bundle" ──► Drift Check workflo
   did too, on the same model and the same kind of traffic, the `retrain` job starts
   a Train & Evaluate run (`src/monitoring/retrain.py`). Its enforced gate then
   decides whether the new model replaces the champion, which also publishes a new
-  image and triggers a drift check of the new model. Requiring two in a row
+  image and starts a drift check of the new model. (GitHub doesn't fire
+  `workflow_run` for runs started with the workflow token, so for these runs the
+  `start-drift-check` job in `train.yml` starts that check itself, passing its run
+  ID as *train_run_id*.) Requiring two in a row
   filters out one-off false alarms, and limits how often it can fire: a retrained
   model is a new model, so it has to drift twice before the next retrain. A
   rejection-rate alert or broken logging never retrains (a new model can't fix

@@ -12,6 +12,8 @@ name: Train & Evaluate - VT Detection Pipeline
 # When a manual run promotes a new champion, the publish-image job builds it
 # as a Docker image, smoke-tests it and pushes it to GitHub Container Registry
 # (ghcr.io/<owner>/vt-detector:champion and :run-<run number>).
+# When the run was started by drift.yml's retrain job, start-drift-check then
+# starts a drift check of the new model (workflow_run doesn't fire for it).
 #
 # Defaults are smoke-test sized: GitHub-hosted runners are CPU-only and cap
 # jobs at 6 hours, and VGG16 on the full dataset takes hours per epoch.
@@ -257,3 +259,24 @@ jobs:
             echo "docker run --rm -p 5002:8080 $IMAGE:champion"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs started with the workflow token (the drift workflow's retrain job)
+  # don't trigger other workflows' workflow_run, so the drift check of the new
+  # model has to be started from here. Runs you start get it automatically.
+  start-drift-check:
+    name: Start the drift check of the new model
+    needs: [train-and-evaluate, publish-image]
+    if: github.triggering_actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start Drift Check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # allow_retrain: behave like the automatic check after a training run.
+        run: |
+          gh workflow run drift.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f train_run_id="$GITHUB_RUN_ID" -f allow_retrain=true
+          echo "Started a drift check of this run's model (Actions → Drift Check)." >> "$GITHUB_STEP_SUMMARY"

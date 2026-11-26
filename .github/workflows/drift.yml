@@ -8,6 +8,8 @@ name: Drift Check - VT Detection Pipeline
 #
 # When it runs, and which model it checks:
 # - after each successful Train & Evaluate run on main: that run's model
+#   (runs started by the retrain job don't fire workflow_run, so Train &
+#   Evaluate starts this workflow itself for those, passing train_run_id)
 # - weekly (Monday 06:00 UTC): the latest successful Train & Evaluate run's model
 # - manually: same as weekly, with an optional simulated problem in the
 #   traffic to see the alarm fire
@@ -50,6 +52,10 @@ on:
         description: "Start retraining if this drift repeats the previous run's (demo of the loop)"
         type: boolean
         default: false
+      train_run_id:
+        description: "Train & Evaluate run ID to take the model from (blank = latest successful on main)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -82,8 +88,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRAIN_RUN_ID: ${{ inputs.train_run_id }}
         run: |
-          run_id="$TRIGGER_RUN_ID"
+          run_id="${TRIGGER_RUN_ID:-$TRAIN_RUN_ID}"
           if [ -z "$run_id" ]; then
             run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow train.yml --branch main \
               --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
